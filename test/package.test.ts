@@ -181,9 +181,11 @@ describe('published package', () => {
     expect(typecheck(installed, `tsconfig.${resolution}.json`)).toBe('');
   });
 
-  it('dry-run publishes only the built files', () => {
-    const output = execFileSync('npm', ['publish', '--dry-run', '--json', dist], { stdio: 'pipe' }).toString();
-    const files: string[] = JSON.parse(output.slice(output.indexOf('{'))).files.map((file: { path: string }) => file.path);
+  it('packs only the built files', () => {
+    // `npm pack --json` answers an array on every npm version; `npm publish --json` changed shape across releases.
+    const output = execFileSync('npm', ['pack', '--dry-run', '--json', dist], { stdio: 'pipe' }).toString();
+    const [packed] = JSON.parse(output.slice(output.indexOf('['))) as { files: { path: string }[] }[];
+    const files = packed.files.map((file) => file.path);
     expect(files.every((file) => !file.startsWith('src/') && !file.startsWith('test/'))).toBe(true);
     expect(files).toEqual(expect.arrayContaining(['index.js', 'a2a.js', 'mcp.js', 'mcp/index.d.ts', 'package.json']));
   }, 120_000);
