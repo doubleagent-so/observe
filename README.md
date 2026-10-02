@@ -1,5 +1,12 @@
 # @doubleagent-so/observe
 
+[![npm](https://img.shields.io/npm/v/@doubleagent-so/observe.svg)](https://www.npmjs.com/package/@doubleagent-so/observe)
+[![CI](https://github.com/doubleagent-so/observe/actions/workflows/ci.yml/badge.svg)](https://github.com/doubleagent-so/observe/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/doubleagent-so/observe/blob/main/LICENSE)
+[![Types](https://img.shields.io/badge/types-included-3178c6.svg)](https://github.com/doubleagent-so/observe/blob/main/src/index.ts)
+[![Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen.svg)](https://github.com/doubleagent-so/observe/blob/main/package.json)
+[![Runtimes](https://img.shields.io/badge/runs%20on-Node%2020%2B%20%C2%B7%20Workers%20%C2%B7%20Bun%20%C2%B7%20Deno-555.svg)](#install)
+
 Record what your AI agent does at its protocol boundaries (A2A, MCP or your own protocol) and see it in
 [Double Agent](https://doubleagent.so): every request and stream, the task states it went through, who called, and
 how it ended.
