@@ -1,0 +1,61 @@
+{
+  "name": "@doubleagent-so/observe",
+  "version": "0.1.0",
+  "description": "Record what your AI agent does (A2A, MCP or your own protocol) and see it in Double Agent.",
+  "keywords": [
+    "ai-agents",
+    "a2a",
+    "mcp",
+    "observability",
+    "analytics"
+  ],
+  "license": "MIT",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/doubleagent-so/observe.git"
+  },
+  "homepage": "https://doubleagent.so/docs/",
+  "bugs": "https://github.com/doubleagent-so/observe/issues",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./a2a": "./src/a2a/index.ts",
+    "./mcp": "./src/mcp/index.ts"
+  },
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "peerDependencies": {
+    "@a2a-js/sdk": ">=1.3 <2",
+    "@modelcontextprotocol/sdk": ">=1.29 <2"
+  },
+  "peerDependenciesMeta": {
+    "@a2a-js/sdk": {
+      "optional": true
+    },
+    "@modelcontextprotocol/sdk": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@a2a-js/sdk": "1.3.0",
+    "@modelcontextprotocol/sdk": "1.31.0",
+    "@types/node": "^26.6.2",
+    "@vitest/coverage-v8": "^5.0.1",
+    "esbuild": "^0.28.2",
+    "miniflare": "5.20260930.0-alpha",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.1",
+    "zod": "4.6.5"
+  }
+}

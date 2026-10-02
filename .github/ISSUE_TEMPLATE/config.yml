@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or idea
+    url: https://github.com/doubleagent-so/observe/discussions
+    about: Ask how to record your agent, or share an idea.
+  - name: Security report
+    url: https://github.com/doubleagent-so/observe/blob/main/SECURITY.md
+    about: Report security issues privately, not in a public issue.
+  - name: Hosted product (dashboard, account, keys)
+    url: https://doubleagent.so/docs/
+    about: The Double Agent cloud that receives the events.

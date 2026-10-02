@@ -1,0 +1,14 @@
+name: Bug
+description: The recorder throws, records an exchange wrong, or an API does not do what the docs say.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes: { label: What happened, description: 'Expected vs actual, with the error if any.' }
+    validations: { required: true }
+  - type: textarea
+    id: repro
+    attributes: { label: Minimal reproduction, description: 'Remove keys and personal data.', render: ts }
+  - type: input
+    id: env
+    attributes: { label: Version and environment, placeholder: '@doubleagent-so/observe 0.1.0, @modelcontextprotocol/sdk 1.31, Node 24 / Workers' }
