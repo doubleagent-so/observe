@@ -205,15 +205,16 @@ const transport = instrumentMcpTransport(new StreamableHTTPClientTransport(new U
 await client.connect(transport);
 ```
 
-| Option        | Meaning                                                                                                                                                |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `recorder`    | The recorder from `createRecorder`.                                                                                                                    |
-| `role`        | `'server'`: requests received are `inbound`. `'client'`: requests sent are `outbound`. Server-to-client callbacks are the reverse.                     |
-| `binding`     | `'stdio'`, `'sse'`, `'streamable-http'` or `'other'`.                                                                                                  |
-| `issuer`      | Server role: the issuer recorded with the SDK's `authInfo.clientId` (hashed, see [Privacy](#privacy)). Default `mcp`. The token is never read.         |
-| `serverUrl`   | Client role: the server's URL. Only its origin (`https://mcp.example`) is recorded, as the counterparty's `card_url`: paths and queries can hold keys. |
-| `onOperation` | `(op, info) => void`, called as each operation starts (`info`: method, kind, direction, target, `requestId`, `sessionId`, `params`).                   |
-| `log`         | `(event, fields) => void` for telemetry failures. Default: JSON lines on `console.warn`.                                                               |
+| Option        | Meaning                                                                                                                                                       |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `recorder`    | The recorder from `createRecorder`.                                                                                                                           |
+| `role`        | `'server'`: requests received are `inbound`. `'client'`: requests sent are `outbound`. Server-to-client callbacks are the reverse.                            |
+| `binding`     | `'stdio'`, `'sse'`, `'streamable-http'` or `'other'`.                                                                                                         |
+| `issuer`      | Server role: the issuer recorded with the SDK's `authInfo.clientId` (hashed, see [Privacy](#privacy)). Default `mcp`. The token is never read.                |
+| `serverUrl`   | Client role: the server's URL. Only its origin (`https://mcp.example`) is recorded, as the counterparty's `card_url`: paths and queries can hold keys.        |
+| `onOperation` | `(op, info) => void`, called as each operation starts (`info`: method, kind, direction, target, `requestId`, `sessionId`, `params`).                          |
+| `redactIds`   | Optional. Replaces the request id, `clientInfo` or task id before they are recorded (see [Redacting MCP ids](#redacting-mcp-ids)). Default: recorded as sent. |
+| `log`         | `(event, fields) => void` for telemetry failures. Default: JSON lines on `console.warn`.                                                                      |
 
 The wrapped transport has the same type as the one you pass in (`McpTransportLike` is the shape it needs:
 `send(message)` and an optional `sessionId`).
@@ -238,7 +239,7 @@ export default { fetch: withMcpTelemetry(handleMcp, { recorder, identify, waitUn
   hands background work to the Workers `ctx`; pass a function to use your own.
 - It flushes for you: after each request the recorder's buffer is flushed in the background (through `waitUntil`), so
   a Worker needs no flush of its own.
-- `onOperation(op, info)` is called as each operation starts, as for `instrumentMcpTransport`; `log(event, fields)`
+- `onOperation(op, info)` and `redactIds` work as for `instrumentMcpTransport`; `log(event, fields)`
   receives telemetry failures (default: JSON lines on `console.warn`; a logger that throws is ignored).
 - A handler that throws is recorded as `protocol_error` with code `internal_error` (native code `exception`), and the
   error is rethrown unchanged.
@@ -302,8 +303,40 @@ own request object, so `mcpOperation` returns `undefined`. Wrap the transport wh
 - Messages your side sends are recorded as they are sent, before delivery is confirmed: a response that then fails to
   send has already finished its operation.
 
+### Redacting MCP ids
+
+Three values come from the caller and are recorded as sent: the JSON-RPC request id (`mcp.request_id`), the client's
+`initialize` name and version (`client_info`) and a tasks `taskId` (`task_ref`). If they can carry anything you would
+rather not send, set `redactIds` on either wrapper. Each function is optional and gets the value as it would be recorded
+(a numeric request id as its decimal string):
+
+```ts
+import { createHmac } from 'node:crypto';
+
+const pseudonym = (id: string) => createHmac('sha256', env.ID_KEY).update(id).digest('hex').slice(0, 32);
+
+instrumentMcpTransport(transport, {
+  recorder,
+  role: 'server',
+  binding: 'streamable-http',
+  redactIds: {
+    requestId: () => undefined, // drop it
+    clientInfo: ({ name }) => ({ name }), // keep the name, drop the version
+    taskId: pseudonym, // the same task gets the same ref, so its states stay linked
+  },
+});
+```
+
+- Return the value to record, or `undefined` to drop it. A returned value is checked like the original; one the wire
+  would reject is dropped.
+- A function that throws drops that value and logs `agent_telemetry_redact_failed`; the operation is still recorded.
+- Keep `taskId` deterministic: every event that names the task (the creating result, status notifications and
+  `tasks/*` requests) uses the value it returns. Dropping it records those requests without a task and skips the
+  task's states.
+- Only what is recorded changes: pairing, your handlers and `onOperation` (`info.requestId`) still see the originals.
+
 Exported types: `McpTransportLike`, `McpTransportOptions`, `McpTelemetryOptions`, `McpHandlerExtra`,
-`McpOperationInfo`, `McpRole` and `OnOperation`.
+`McpOperationInfo`, `McpRedactIds`, `McpPeerInfo`, `McpRole` and `OnOperation`.
 
 ## Privacy
 
@@ -319,6 +352,8 @@ Exported types: `McpTransportLike`, `McpTransportOptions`, `McpTelemetryOptions`
     across rotations, set a stable `subjectKey` (from a secret, such as `DOUBLEAGENT_SUBJECT_KEY`).
   - Keep `subjectKey` secret, like the agent key: anyone holding it can hash guessed subjects and match them.
 - File bytes and file URLs are never sent; a file is recorded by its name, media type and size.
+- **MCP ids are sent as the caller chose them** (request id, `clientInfo`, task id). To drop or replace them, set
+  [`redactIds`](#redacting-mcp-ids) on the MCP wrapper.
 
 ## Custom protocols
 
@@ -481,6 +516,8 @@ The recorder buffers events and sends them in batches every 2 seconds (`flushInt
 - `authenticated.subject` is hashed (HMAC-SHA256, see [Privacy](#privacy)) before it leaves the process. Raw
   `Authorization` or signature headers are never treated as identity.
 - File bytes and file URLs are never sent; a file is recorded by its name, media type and size.
+- MCP request ids, `clientInfo` and task ids are sent as the caller chose them unless you set
+  [`redactIds`](#redacting-mcp-ids).
 - `redact(message)` runs before content leaves the process and changes content only: part summaries (kind, media type,
   size) come from the original parts. If it throws, no content is sent for that message.
 - `content: false` never sends content.

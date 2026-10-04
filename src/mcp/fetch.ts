@@ -36,6 +36,7 @@ import {
   type FinishMetrics,
   type McpEngine,
   type ObserveContext,
+  type McpRedactIds,
   type OnOperation,
   type StartedRequest,
 } from './engine.ts';
@@ -51,6 +52,8 @@ export interface McpTelemetryOptions {
   waitUntil?: true | WaitUntil;
   /** Called with each operation's handle as it starts (paid tools: charge or record cost on it). */
   onOperation?: OnOperation;
+  /** Replaces the request id, client name and version or task id before they are recorded. Default: recorded as sent. */
+  redactIds?: McpRedactIds;
   /** Telemetry failures; a logger that throws is ignored. Default: JSON lines on `console.warn`. */
   log?: Log;
 }
@@ -116,6 +119,7 @@ class McpFetchTelemetry<Args extends unknown[]> {
       role: 'server',
       binding: 'streamable-http',
       ...(options.onOperation ? { onOperation: options.onOperation } : {}),
+      ...(options.redactIds ? { redactIds: options.redactIds } : {}),
       log: this.#log,
     });
     this.#sessions = new HttpSessions(options.recorder);

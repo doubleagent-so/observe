@@ -54,6 +54,25 @@ export interface McpOperationInfo {
 
 export type OnOperation = (op: OperationHandle, info: McpOperationInfo) => void;
 
+export type McpPeerInfo = { name: string; version?: string };
+
+/**
+ * Replaces caller-chosen MCP identifiers before they are recorded. Unset functions record the value as sent. A
+ * function returns the value to record, or `undefined` to drop it; its value is checked like the original (one the wire would reject is dropped), and a
+ * function that throws drops the value and logs `agent_telemetry_redact_failed`. Recording only: messages, pairing and
+ * the `onOperation` hook still see the original values.
+ *
+ * Example: `{ taskId: (id) => hmac(id) }` records task `abc` as `task_ref: hmac('abc')` on every event that names it.
+ */
+export interface McpRedactIds {
+  /** The JSON-RPC request id (numbers as their decimal string), recorded as `mcp.request_id`. */
+  requestId?: (id: string) => string | undefined;
+  /** The client's `initialize` name and version, recorded as `mcp.client_info` and `counterparty.client_info`. */
+  clientInfo?: (info: McpPeerInfo) => McpPeerInfo | undefined;
+  /** A tasks `taskId`, recorded as `task_ref`. Keep it deterministic so a task's events stay linked. */
+  taskId?: (id: string) => string | undefined;
+}
+
 export interface EngineOptions {
   recorder: Recorder;
   role: McpRole;
@@ -63,6 +82,7 @@ export interface EngineOptions {
   /** Client role: the server's URL; only its origin is sent, as `card_url`. */
   serverUrl?: string;
   onOperation?: OnOperation;
+  redactIds?: McpRedactIds;
   log: Log;
 }
 
@@ -203,6 +223,32 @@ class Engine implements McpEngine {
     };
   }
 
+  /** `value` through the host's redaction and checked like the original; dropped and logged when redaction throws. */
+  #redacted<T>(
+    redact: ((value: T) => T | undefined) | undefined,
+    value: T | undefined,
+    check: (value: unknown) => T | undefined,
+  ): T | undefined {
+    if (value === undefined || !redact) return value;
+    try {
+      return check(redact(value));
+    } catch (error) {
+      this.#log('agent_telemetry_redact_failed', { reason: failureReason(error) });
+      return undefined;
+    }
+  }
+
+  #taskRef(value: unknown): string | undefined {
+    return this.#redacted(this.#options.redactIds?.taskId, nativeRef(value), nativeRef);
+  }
+
+  /** A task in a result or notification, with its `task_ref` redacted; null when there is none left to record. */
+  #task(value: unknown): McpTaskObservation | null {
+    const task = mcpTask(value);
+    const taskRef = task ? this.#taskRef(task.taskRef) : undefined;
+    return task && taskRef ? { ...task, taskRef } : null;
+  }
+
   #notifyHook(op: OperationHandle, info: McpOperationInfo): void {
     if (!this.#options.onOperation) return;
     try {
@@ -253,7 +299,8 @@ class Engine implements McpEngine {
     if (origin !== 'peer' || this.#options.role !== 'server') return;
     const { session } = context;
     if (message.method !== 'initialize' || !isRecord(message.params)) return;
-    session.clientInfo = mcpPeerInfo(message.params.clientInfo) ?? session.clientInfo;
+    const clientInfo = this.#redacted(this.#options.redactIds?.clientInfo, mcpPeerInfo(message.params.clientInfo), mcpPeerInfo);
+    session.clientInfo = clientInfo ?? session.clientInfo;
     session.requestedVersion = mcpVersion(message.params.protocolVersion) ?? session.requestedVersion;
     session.capabilities = mcpCapabilities(message.params.capabilities);
   }
@@ -264,10 +311,10 @@ class Engine implements McpEngine {
     const params = isRecord(message.params) ? message.params : {};
     const isInitialize = method === 'initialize';
     const target = mcpTarget(method, params);
-    const taskRef = method.startsWith('tasks/') ? nativeRef(params.taskId) : undefined;
+    const taskRef = method.startsWith('tasks/') ? this.#taskRef(params.taskId) : undefined;
     const requestedVersion = isInitialize ? mcpVersion(params.protocolVersion) : undefined;
     const announced = isInitialize && origin === 'peer' && this.#options.role === 'server' ? session.clientInfo : undefined;
-    const requestId = mcpRequestId(message.id);
+    const requestId = this.#redacted(this.#options.redactIds?.requestId, mcpRequestId(message.id), mcpRequestId);
     return {
       ...(requestedVersion ? { version: requestedVersion } : {}),
       ...(target ? { target } : {}),
@@ -333,7 +380,7 @@ class Engine implements McpEngine {
     const { result } = message;
     if (method === 'initialize') this.#learnFromInitializeResult(result, session);
     for (const input of mcpResultMessages(method, result)) op.message(input);
-    const task = mcpTask(result);
+    const task = this.#task(result);
     if (task) this.#recordTaskState(this.#stateFor(directionOf(requester)), op, task);
     op.finish({ ...(isToolError(method, result) ? { outcome: 'tool_error', error: TOOL_ERROR } : { outcome: 'ok' }), ...metrics });
   }
@@ -349,7 +396,7 @@ class Engine implements McpEngine {
     const params = isRecord(message.params) ? message.params : {};
     if (message.method === 'notifications/cancelled') return this.#cancel(origin, params, context.session);
     if (message.method !== 'notifications/tasks/status') return;
-    const task = mcpTask(params);
+    const task = this.#task(params);
     if (!task) return;
     // The sender executes the task; requests reaching it were sent by the other side.
     const owner = otherSide(origin);

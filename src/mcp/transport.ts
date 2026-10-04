@@ -17,7 +17,7 @@ import { defaultLog, guardLog, safely, type Log } from '../http.ts';
 import { isRecord } from '../patterns.ts';
 import type { Recorder } from '../recorder.ts';
 import { ulid } from '../ulid.ts';
-import { createMcpEngine, type McpRole, type ObserveContext, type OnOperation, type StartedRequest } from './engine.ts';
+import { createMcpEngine, type McpRedactIds, type McpRole, type ObserveContext, type OnOperation, type StartedRequest } from './engine.ts';
 import { nativeRef } from './mapping.ts';
 import { newSession } from './session.ts';
 
@@ -38,6 +38,8 @@ export interface McpTransportOptions {
   serverUrl?: string;
   /** Called with each operation's handle as it starts (paid tools: charge or record cost on it). */
   onOperation?: OnOperation;
+  /** Replaces the request id, client name and version or task id before they are recorded. Default: recorded as sent. */
+  redactIds?: McpRedactIds;
   /** Telemetry failures; a logger that throws is ignored. Default: JSON lines on `console.warn`. */
   log?: Log;
 }
