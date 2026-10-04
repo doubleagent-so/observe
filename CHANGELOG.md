@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0 — unreleased
+## 0.2.0 — 2026-10-04
 
 - **MCP:** `redactIds` on `instrumentMcpTransport` and `withMcpTelemetry` replaces or drops the request id, the
   client's `clientInfo` and task ids before they are recorded. Each function is optional; without it they are recorded
