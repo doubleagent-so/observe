@@ -1,6 +1,14 @@
 # Changelog
 
-## 0.1.0 — unreleased
+## 0.2.0 — unreleased
+
+- **MCP:** `redactIds` on `instrumentMcpTransport` and `withMcpTelemetry` replaces or drops the request id, the
+  client's `clientInfo` and task ids before they are recorded. Each function is optional; without it they are recorded
+  as sent, as before. New types `McpRedactIds` and `McpPeerInfo`.
+- **Docs:** the `@a2a-js/sdk` client example builds its factory from `ClientFactoryOptions.default`, which typechecks
+  against the SDK 1.3.
+
+## 0.1.0 — 2026-10-02
 
 First public release. Record what your AI agent does at its protocol boundaries (A2A, MCP or your own protocol) and see
 it in Double Agent.
