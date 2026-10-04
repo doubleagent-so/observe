@@ -1,6 +1,8 @@
 import type { AgentCard, Message, StreamResponse, Task } from '@a2a-js/sdk';
+import { readFileSync } from 'node:fs';
 import {
   ClientFactory,
+  ClientFactoryOptions,
   JsonRpcTransportFactory,
   type AfterArgs,
   type BeforeArgs,
@@ -755,5 +757,38 @@ describe('a2aTelemetryInterceptor a2a block', () => {
     expect(started[0]?.a2a).toEqual({ extensions_requested: ['https://ext.test/old'] });
     expect(started[1]).not.toHaveProperty('a2a');
     valid();
+  });
+});
+
+describe('README outbound example', () => {
+  const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
+  const example = readme.split('## Outbound calls with the `@a2a-js/sdk` client')[1]?.split('```ts')[1]?.split('```')[0] ?? '';
+
+  it('keeps the SDK default transports when adding the interceptor', () => {
+    expect(example).toContain('ClientFactoryOptions.createFrom(ClientFactoryOptions.default, {');
+    expect(example).toContain('clientConfig: { interceptors: [a2aTelemetryInterceptor({ recorder })] },');
+    expect(example).not.toContain('new ClientFactory({ clientConfig');
+  });
+
+  it('records a call through a factory built the same way', async () => {
+    const card = cardOf();
+    const server = agentServer(completes, card);
+    const client = telemetry();
+    vi.stubGlobal('fetch', server.fetchImpl);
+    try {
+      const factory = new ClientFactory(
+        ClientFactoryOptions.createFrom(ClientFactoryOptions.default, {
+          clientConfig: { interceptors: [a2aTelemetryInterceptor({ recorder: client.recorder })] },
+        }),
+      );
+      const sdk = await factory.createFromAgentCard(card);
+      await sdk.sendMessage(send(userMessage('find flights')));
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    const all = await client.events();
+    expect(all[0]).toMatchObject({ type: 'operation.started', direction: 'outbound', method: 'SendMessage' });
+    expect(all.at(-1)).toMatchObject({ type: 'operation.finished', outcome: 'ok' });
+    client.valid();
   });
 });

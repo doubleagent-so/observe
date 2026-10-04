@@ -133,10 +133,14 @@ operation.
 Add the interceptor to record each call your agent makes to another agent, with the called agent's card URL.
 
 ```ts
-import { ClientFactory } from '@a2a-js/sdk/client';
+import { ClientFactory, ClientFactoryOptions } from '@a2a-js/sdk/client';
 import { a2aTelemetryInterceptor } from '@doubleagent-so/observe/a2a';
 
-const factory = new ClientFactory({ clientConfig: { interceptors: [a2aTelemetryInterceptor({ recorder })] } });
+const factory = new ClientFactory(
+  ClientFactoryOptions.createFrom(ClientFactoryOptions.default, {
+    clientConfig: { interceptors: [a2aTelemetryInterceptor({ recorder })] },
+  }),
+);
 const client = await factory.createFromUrl('https://other-agent.example');
 ```
 
