@@ -1,14 +1,31 @@
-# @doubleagent-so/observe
+<p align="center">
+  <img src="https://raw.githubusercontent.com/doubleagent-so/observe/main/assets/doubleagent.svg" width="80" height="80" alt="Double Agent">
+</p>
 
-**[Live demo](https://lab.doubleagent.dev)** · [Docs](https://doubleagent.so/docs/agents/) · [Website](https://doubleagent.so) ·
-[npm](https://www.npmjs.com/package/@doubleagent-so/observe) · [Changelog](https://github.com/doubleagent-so/observe/blob/main/CHANGELOG.md) · [Report an issue](https://github.com/doubleagent-so/observe/issues)
+<h1 align="center">Observe</h1>
 
-[![npm](https://img.shields.io/npm/v/@doubleagent-so/observe.svg)](https://www.npmjs.com/package/@doubleagent-so/observe)
-[![CI](https://github.com/doubleagent-so/observe/actions/workflows/ci.yml/badge.svg)](https://github.com/doubleagent-so/observe/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/doubleagent-so/observe/blob/main/LICENSE)
-[![Types](https://img.shields.io/badge/types-included-3178c6.svg)](https://github.com/doubleagent-so/observe/blob/main/src/index.ts)
-[![Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen.svg)](https://github.com/doubleagent-so/observe/blob/main/package.json)
-[![Runtimes](https://img.shields.io/badge/runs%20on-Node%2020%2B%20%C2%B7%20Workers%20%C2%B7%20Bun%20%C2%B7%20Deno-555.svg)](#install)
+<p align="center"><code>@doubleagent-so/observe</code></p>
+
+<p align="center">Record what your AI agent does at its protocol boundaries and see it in Double Agent.</p>
+
+<p align="center">
+  <strong><a href="https://lab.doubleagent.dev">Live demo</a></strong> ·
+  <a href="https://doubleagent.so/docs/agents/">Docs</a> ·
+  <a href="https://doubleagent.so">Website</a> ·
+  <a href="https://www.npmjs.com/package/@doubleagent-so/observe">npm</a> ·
+  <a href="https://github.com/doubleagent-so/observe/blob/main/CHANGELOG.md">Changelog</a> ·
+  <a href="https://github.com/doubleagent-so/observe/issues">Report an issue</a> ·
+  <a href="https://github.com/doubleagent-so/observe/blob/main/LICENSE">MIT license</a>
+</p>
+
+<p align="center">
+  <a href="https://www.npmjs.com/package/@doubleagent-so/observe"><img src="https://img.shields.io/npm/v/@doubleagent-so/observe.svg" alt="npm"></a>
+  <a href="https://github.com/doubleagent-so/observe/actions/workflows/ci.yml"><img src="https://github.com/doubleagent-so/observe/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/doubleagent-so/observe/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
+  <a href="https://github.com/doubleagent-so/observe/blob/main/src/index.ts"><img src="https://img.shields.io/badge/types-included-3178c6.svg" alt="Types"></a>
+  <a href="https://github.com/doubleagent-so/observe/blob/main/package.json"><img src="https://img.shields.io/badge/dependencies-0-brightgreen.svg" alt="Dependencies"></a>
+  <a href="https://github.com/doubleagent-so/observe#install"><img src="https://img.shields.io/badge/runs%20on-Node%2020%2B%20%C2%B7%20Workers%20%C2%B7%20Bun%20%C2%B7%20Deno-555.svg" alt="Runtimes"></a>
+</p>
 
 Record what your AI agent does at its protocol boundaries (A2A, MCP or your own protocol) and see it in
 [Double Agent](https://doubleagent.so): every request and stream, the task states it went through, who called, and
@@ -577,6 +594,18 @@ toMicros(0.0042); // 4200; null for anything finer than a micro
   finished as `transport_error`), and a request still pending after an hour is finished as `transport_error` the next
   time its session is used. Targets, request IDs and client names are cut to 128 characters.
 
-## License
+---
 
-MIT
+## Support
+
+- Questions and bugs: [open an issue](https://github.com/doubleagent-so/observe/issues/new/choose).
+- Private account or billing questions: [support@doubleagent.so](mailto:support@doubleagent.so). Never post secret keys or session tokens in a public issue.
+- Security problems: report them privately as described in [SECURITY.md](https://github.com/doubleagent-so/observe/blob/main/SECURITY.md).
+
+<p align="center">
+  Maintained by <a href="https://doubleagent.so">Double Agent</a> ·
+  <a href="https://github.com/doubleagent-so/observe/blob/main/CONTRIBUTING.md">Contributing</a> ·
+  <a href="https://github.com/doubleagent-so/observe/blob/main/CODE_OF_CONDUCT.md">Code of conduct</a> ·
+  <a href="https://github.com/doubleagent-so/observe/blob/main/SECURITY.md">Security</a> ·
+  <a href="https://github.com/doubleagent-so/observe/blob/main/LICENSE">MIT license</a>
+</p>
