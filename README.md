@@ -1,5 +1,8 @@
 # @doubleagent-so/observe
 
+**[Live demo](https://lab.doubleagent.dev)** · [Docs](https://doubleagent.so/docs/agents/) · [Website](https://doubleagent.so) ·
+[npm](https://www.npmjs.com/package/@doubleagent-so/observe) · [Changelog](https://github.com/doubleagent-so/observe/blob/main/CHANGELOG.md) · [Report an issue](https://github.com/doubleagent-so/observe/issues)
+
 [![npm](https://img.shields.io/npm/v/@doubleagent-so/observe.svg)](https://www.npmjs.com/package/@doubleagent-so/observe)
 [![CI](https://github.com/doubleagent-so/observe/actions/workflows/ci.yml/badge.svg)](https://github.com/doubleagent-so/observe/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/doubleagent-so/observe/blob/main/LICENSE)

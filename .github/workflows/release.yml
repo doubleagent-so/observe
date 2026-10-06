@@ -1,14 +1,15 @@
 # Publishes dist/ to npm when a version tag (v1.2.3) is pushed. The tag must match package.json. A version already on
 # npm (published by hand) is tested and built but not published again.
 # Auth is npm trusted publishing (OIDC, no token secret): the package's trusted publisher on npmjs.com names this repo,
-# release.yml and the `npm` environment. It needs npm 11.5.1 or later.
+# release.yml and the `npm` environment. It needs npm 11.5.1 or later. The `release` job then creates the GitHub Release.
 name: Release
 on:
   push: { tags: ['v*.*.*'] }
-permissions: { contents: read, id-token: write }
+permissions: { contents: read }
 jobs:
   publish:
     runs-on: ubuntu-latest
+    permissions: { contents: read, id-token: write }
     environment: npm
     steps:
       - uses: actions/checkout@v7
@@ -16,7 +17,8 @@ jobs:
         with: { node-version: 24, cache: npm, registry-url: 'https://registry.npmjs.org' }
       - run: npm install -g npm@11.21.0
       - run: npm ci
-      - run: test "v$(node -p 'require(`./package.json`).version')" = "$GITHUB_REF_NAME"
+      - name: Tag matches package.json version
+        run: test "v$(node -p 'require(`./package.json`).version')" = "$GITHUB_REF_NAME"
       - run: npm run typecheck && npm run test:coverage && npm run build
       - id: npm
         run: |
@@ -25,3 +27,23 @@ jobs:
           fi
       - if: steps.npm.outputs.published != 'true'
         run: npm publish ./dist --provenance --access public
+  # Creates the GitHub Release for the tag once the package is on npm. Notes are this version's CHANGELOG.md section,
+  # or GitHub's generated notes when it has none. A release that already exists is left alone, so a re-run is safe.
+  release:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions: { contents: write }
+    steps:
+      - uses: actions/checkout@v7
+      - env: { GH_TOKEN: '${{ github.token }}', TAG: '${{ github.ref_name }}' }
+        run: |
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists"
+            exit 0
+          fi
+          awk -v v="${TAG#v}" '/^## / { if (found) exit; found = index($0, "## " v " ") == 1 || $0 == "## " v; next } found' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          if grep -q '[^[:space:]]' "$RUNNER_TEMP/notes.md"; then
+            gh release create "$TAG" -R "$GITHUB_REPOSITORY" --verify-tag --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
+          else
+            gh release create "$TAG" -R "$GITHUB_REPOSITORY" --verify-tag --title "$TAG" --generate-notes
+          fi

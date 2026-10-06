@@ -46,6 +46,7 @@ npm run build          # dist/, as published
 ## Releases
 
 Maintainers bump `version` in `package.json`, update `CHANGELOG.md`, and push a `v<version>` tag. The release
-workflow tests, builds and publishes `dist/` to npm with provenance.
+workflow checks the tag matches `package.json`, tests, builds and publishes `dist/` to npm with provenance, then creates
+the GitHub Release with that version's `CHANGELOG.md` section as its notes.
 
 Security issues go to [Security](SECURITY.md), not public issues.
