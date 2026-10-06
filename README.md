@@ -9,9 +9,8 @@
 <p align="center">Record what your AI agent does at its protocol boundaries and see it in Double Agent.</p>
 
 <p align="center">
-  <strong><a href="https://lab.doubleagent.dev">Live demo</a></strong> ·
+  <strong><a href="https://doubleagent.so">Website</a></strong> ·
   <a href="https://doubleagent.so/docs/agents/">Docs</a> ·
-  <a href="https://doubleagent.so">Website</a> ·
   <a href="https://www.npmjs.com/package/@doubleagent-so/observe">npm</a> ·
   <a href="https://github.com/doubleagent-so/observe/blob/main/CHANGELOG.md">Changelog</a> ·
   <a href="https://github.com/doubleagent-so/observe/issues">Report an issue</a> ·

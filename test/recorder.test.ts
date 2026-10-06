@@ -547,6 +547,20 @@ describe('createRecorder edge cases', () => {
     ]);
   });
 
+  it('trims every trailing slash of the endpoint, in linear time on a long run of slashes', async () => {
+    const server = endpoint(accepted);
+    const slashes = '/'.repeat(100_000);
+    for (const url of ['https://api.test///', `https://api.test${slashes}x`]) {
+      const instance = createRecorder({ key: 'ak_test_x', endpoint: url, fetch: server.fetch, flushIntervalMs: 0 });
+      instance.startOperation(start);
+      await instance.flush();
+    }
+    const startedAt = performance.now();
+    createRecorder({ key: 'ak_test_x', endpoint: `https://api.test${slashes}x`, fetch: server.fetch, flushIntervalMs: 0 });
+    expect(performance.now() - startedAt).toBeLessThan(250);
+    expect(server.urls).toEqual(['https://api.test/v1/agent-events', `https://api.test${slashes}x/v1/agent-events`]);
+  });
+
   it('uses global fetch and the default endpoint, and counts a malformed 202 body', async () => {
     const calls: string[] = [];
     vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {

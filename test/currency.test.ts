@@ -36,6 +36,15 @@ describe('currencies', () => {
     expect(toMinorUnits('9999999999999999', 'USDC')).toBeNull(); // past Number.MAX_SAFE_INTEGER once scaled
   });
 
+  it('ignores trailing fraction zeros, in linear time on a long run of zeros', () => {
+    expect(toMinorUnits('1.2000', 'USD')).toBe(120);
+    expect(toMinorUnits('1.', 'USD')).toBeNull();
+    const startedAt = performance.now();
+    expect(toMinorUnits(`1.${'0'.repeat(100_000)}1`, 'USD')).toBeNull();
+    expect(toMinorUnits(`1.5${'0'.repeat(100_000)}`, 'USD')).toBe(150);
+    expect(performance.now() - startedAt).toBeLessThan(250);
+  });
+
   it('scales 4-decimal currencies with their own exponent', () => {
     expect(toMinorUnits('1.2345', 'CLF')).toBe(12_345);
     expect(toMinorUnits('1.23456', 'UYW')).toBeNull();

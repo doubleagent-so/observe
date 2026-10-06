@@ -11,6 +11,7 @@ import { defaultLog, failureReason, guardLog, type Log } from './http.ts';
 import { protocolOf, type ChargeInput, type CostInput, type MoneyLinks, type TransactionInput } from './money.ts';
 import { createOperationHandle, recordTransaction, type OperationDependencies } from './operation.ts';
 import { SubjectHasher } from './subject-hasher.ts';
+import { trimTrailing } from './text.ts';
 
 export type CounterpartyInput = Omit<CounterpartyEvidence, 'authenticated'> & {
   /** The host's authenticated principal; `subject` is hashed (HMAC-SHA256, see `subjectKey`) before it leaves the process. */
@@ -158,7 +159,7 @@ function ingestUrl(endpoint: string): string | undefined {
     return undefined;
   }
   const isSecure = parsed.protocol === 'https:' || (parsed.protocol === 'http:' && LOOPBACK_HOSTS.has(parsed.hostname));
-  return isSecure ? `${endpoint.replace(/\/+$/, '')}/v1/agent-events` : undefined;
+  return isSecure ? `${trimTrailing(endpoint, '/')}/v1/agent-events` : undefined;
 }
 
 /**

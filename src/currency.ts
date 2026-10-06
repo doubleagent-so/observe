@@ -1,5 +1,7 @@
 /** Currency facts shared by the recorder and the API: minor-unit exponents and the stablecoins we peg. */
 
+import { trimTrailing } from './text.ts';
+
 /** A currency code on the wire: an ISO 4217 code or a token symbol (`USD`, `USDC`). */
 export const CURRENCY = /^[A-Z0-9]{3,5}$/;
 
@@ -66,7 +68,7 @@ function scale(value: number | string, exponent: number, maxWholeDigits: number)
   const match = new RegExp(`^(-?)(\\d{1,${maxWholeDigits}})(?:\\.(\\d+))?$`).exec(decimalText(value));
   if (!match) return null;
   const [, sign, whole, fraction = ''] = match;
-  const significant = fraction.replace(/0+$/, '');
+  const significant = trimTrailing(fraction, '0');
   if (significant.length > exponent) return null;
   const units = Number(whole + significant.padEnd(exponent, '0'));
   if (!Number.isSafeInteger(units)) return null;
