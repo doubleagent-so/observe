@@ -1,6 +1,6 @@
 {
   "name": "@doubleagent-so/observe",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Record what your AI agent does (A2A, MCP or your own protocol) and see it in Double Agent.",
   "keywords": [
     "ai-agents",

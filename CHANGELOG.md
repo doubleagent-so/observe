@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.1 — 2026-10-06
+
+- **Security:** trailing slashes of the endpoint URL and trailing zeros of currency amounts are trimmed with a linear
+  scan instead of two regular expressions that crafted input could stall (ReDoS; CodeQL). Behaviour is unchanged.
+- **Docs:** shared Double Agent README header, top links and footer, with links on doubleagent.so.
+- **Releases:** the release workflow now also creates the GitHub Release, with this changelog section as its notes.
+
 ## 0.2.0 — 2026-10-04
 
 - **MCP:** `redactIds` on `instrumentMcpTransport` and `withMcpTelemetry` replaces or drops the request id, the
