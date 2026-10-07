@@ -36,6 +36,20 @@ export const LIMITS = {
   peerVersion: 64,
   /** Longest issuer of an authenticated principal, in UTF-16 units. */
   issuer: 256,
+  /** Longest OAuth client id (or MCP Client ID Metadata Document URL), in UTF-16 units. */
+  clientId: 2048,
+  /** Longest acting agent (`actor`, an RFC 8693 `act.sub`), in UTF-16 units. */
+  actor: 256,
+  /** Most scopes in one list, and the longest scope, in UTF-16 units. */
+  scopes: 32,
+  scope: 128,
+  /** Longest proof (a compact JWS), in UTF-16 units. */
+  proof: 8192,
+  /** Most headers forwarded with a signed request, and the longest value, in UTF-8 bytes. */
+  signedHeaders: 24,
+  headerValue: 8192,
+  /** Longest mandate reference, in UTF-16 units. */
+  mandateRef: 256,
 } as const;
 
 export const EVENT_TYPES = [
@@ -65,6 +79,22 @@ export const TERMINAL_STATES = ['completed', 'failed', 'canceled', 'rejected'] a
 export const ROLES = ['caller', 'agent'] as const;
 export const PART_KINDS = ['text', 'data', 'file'] as const;
 export const SIGNATURE_SCHEMES = ['web-bot-auth', 'erc-8128'] as const;
+/** What an operation does: from MCP tool annotations or the host. */
+export const ACCESS_LEVELS = ['read', 'write', 'destructive'] as const;
+/**
+ * The standard a grant (on-behalf-of delegation) comes from. `pap` (Personal Agent Protocol) is added when its v0.1
+ * specification is published; until then the API rejects it.
+ */
+export const DELEGATION_PROTOCOLS = ['oauth', 'pact', 'a2a', 'ap2'] as const;
+/** A signed artifact Double Agent verifies itself. `pact-delegation` and `pact-agent` are bearer tokens. */
+export const PROOF_KINDS = ['pact-receipt', 'pact-delegation', 'pact-agent'] as const;
+/** Payment mandate schemes a transaction can reference. */
+export const MANDATE_SCHEMES = ['ap2', 'acp'] as const;
+/**
+ * Request headers never forwarded with a signed request: they are credentials. A signature that covers one cannot be
+ * verified without sending it, so it is not forwarded at all.
+ */
+export const FORBIDDEN_SIGNED_HEADERS = ['authorization', 'cookie', 'proxy-authorization'] as const;
 export const CAPABILITIES = ['streaming', 'push', 'sampling', 'elicitation', 'roots', 'tasks'] as const;
 export const TRANSACTION_KINDS = ['charge', 'refund', 'payout', 'fee', 'credit'] as const;
 export const PAYMENT_METHODS = ['card', 'link', 'bank', 'x402', 'ap2', 'invoice', 'credits', 'manual', 'other'] as const;
@@ -82,6 +112,10 @@ export type Role = (typeof ROLES)[number];
 export type PartKind = (typeof PART_KINDS)[number];
 export type SignatureScheme = (typeof SIGNATURE_SCHEMES)[number];
 export type Capability = (typeof CAPABILITIES)[number];
+export type Access = (typeof ACCESS_LEVELS)[number];
+export type DelegationProtocol = (typeof DELEGATION_PROTOCOLS)[number];
+export type ProofKind = (typeof PROOF_KINDS)[number];
+export type MandateScheme = (typeof MANDATE_SCHEMES)[number];
 export type TransactionKind = (typeof TRANSACTION_KINDS)[number];
 export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
 export type MoneyBasis = (typeof MONEY_BASES)[number];
@@ -103,14 +137,76 @@ export interface AdvertisedProtocol {
   capabilities: Capability[];
 }
 
+/** The principal the host's auth middleware verified; the recorder hashes the subject before sending. */
+export interface AuthenticatedEvidence {
+  issuer: string;
+  subject_hash: string;
+  /** OAuth client id, or an MCP Client ID Metadata Document `https` URL (≤ 2048). */
+  client_id?: string;
+  /** The agent acting for the subject: RFC 8693 `act.sub`, or the PACT personal agent's issuer (≤ 256). */
+  actor?: string;
+  /** The token's granted scopes (≤ 32, each ≤ 128). */
+  scopes?: string[];
+}
+
+/**
+ * A grant: someone (the principal) let an agent act for them. Principal and grant ids travel as HMAC hashes only.
+ *
+ * Example: `{ protocol: 'oauth', issuer: 'https://auth.example', principal_hash: '3f…', actor: 'agent-7', scopes: ['orders:read'],
+ * expires_at: '2026-10-08T12:00:00.000Z', verification: { status: 'verified', by: 'reporter' } }`.
+ */
+export interface DelegationEvidence {
+  protocol: DelegationProtocol;
+  issuer?: string;
+  principal_hash?: string;
+  actor?: string;
+  client_id?: string;
+  /** What the grant allows. */
+  scopes?: string[];
+  /** What this call used of it. */
+  scopes_used?: string[];
+  access?: 'read' | 'write';
+  /** ISO-8601 with milliseconds. */
+  expires_at?: string;
+  grant_id_hash?: string;
+  /** What the host found when it checked the grant itself. `reason` is a short code: `expired`, `bad_signature`. */
+  verification?: { status: 'verified' | 'failed'; by: 'reporter'; reason?: string };
+  /**
+   * A signed artifact for Double Agent to verify; only with `protocol: 'pact'`. A PACT receipt is not a credential;
+   * `pact-delegation` and `pact-agent` are bearer tokens, sent only when the host passes them explicitly.
+   */
+  proof?: { kind: ProofKind; jws: string };
+}
+
+/** The signed components of a request, forwarded so Double Agent verifies the signature itself. */
+export interface ForwardedRequest {
+  method: string;
+  url: string;
+  /** Lower-case names; never `authorization`, `cookie` or `proxy-authorization`. */
+  headers: Record<string, string>;
+}
+
+/** A request signature: verified by the host (`reporter`), or forwarded for Double Agent to verify. */
+export type SignatureEvidence =
+  | { scheme: SignatureScheme; key_id: string; verified_by: 'reporter' }
+  | { scheme: SignatureScheme; key_id?: string; verified_by: 'double_agent'; request: ForwardedRequest };
+
+/** A payment mandate by reference only; mandate contents are never sent. */
+export interface MandateRef {
+  scheme: MandateScheme;
+  ref: string;
+}
+
 /** Evidence about the other party. Each field is optional; `{}` resolves to the agent's unknown counterparty. */
 export interface CounterpartyEvidence {
   card_url?: string;
   declared_name?: string;
   client_info?: { name: string; version?: string };
   /** From the host's auth middleware; the recorder hashes the subject before sending. */
-  authenticated?: { issuer: string; subject_hash: string };
-  signature?: { scheme: SignatureScheme; key_id: string; verified_by: 'reporter' };
+  authenticated?: AuthenticatedEvidence;
+  /** The grant the caller acts under, when it acts for someone else. */
+  delegation?: DelegationEvidence;
+  signature?: SignatureEvidence;
   /** Weak: groups callers that have nothing else. */
   network?: { ip_prefix_hash: string; ua_family?: string };
   advertised_protocols?: AdvertisedProtocol[];
@@ -153,6 +249,10 @@ export interface OperationStarted extends Envelope {
   target?: string;
   counterparty: CounterpartyEvidence;
   request_bytes?: number;
+  /** What the operation does: `read`, `write` or `destructive` (MCP tool annotations, or the host). */
+  access?: Access;
+  /** The scopes the operation needs. */
+  scope_required?: string[];
 }
 
 export interface OperationFinished extends Envelope {
@@ -164,6 +264,8 @@ export interface OperationFinished extends Envelope {
   stream_events?: number;
   response_bytes?: number;
   error?: { native_code: string; code: string };
+  /** An HTTP 403 `insufficient_scope` challenge, with the scopes the server asked for. */
+  insufficient_scope?: { required: string[] };
 }
 
 export interface PartSummary {
@@ -220,6 +322,8 @@ export interface TransactionRecorded extends MoneyEnvelope {
   basis: MoneyBasis;
   status: TransactionStatus;
   external_ref?: string;
+  /** The AP2 or ACP mandate the payment was made under, by reference. */
+  mandate_ref?: MandateRef;
 }
 
 export interface CostUsage {

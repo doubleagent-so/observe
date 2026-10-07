@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+Additive and optional on the wire; needs a Double Agent API that accepts the new fields (see "Server support" in the
+README).
+
+- **Caller identity:** `counterparty.authenticated` gains `client_id`, `actor` and `scopes`; a new
+  `counterparty.delegation` carries the grant a caller acts under (`oauth`, `pact`, `a2a`, `ap2`; PAP once its v0.1 is published), with
+  `principal` and `grant_id` hashed before they leave the process (`principal_hash`, `grant_id_hash`), and, for PACT grants, an optional
+  `proof` (PACT receipt, or an explicitly passed bearer token) for Double Agent to verify. `counterparty.signature` can
+  now carry the signed request components (`verified_by: 'double_agent'`) instead of a host verdict.
+- **Helpers:** `oauthEvidence(claims)` (from verified access-token claims, RFC 8693 `act` as the acting agent),
+  `signedRequestEvidence(request)` (Web Bot Auth and ERC-8128; never forwards `Authorization`, `Cookie` or
+  `Proxy-Authorization`) and `parseInsufficientScope(wwwAuthenticate)`. New constants `ACCESS_LEVELS`,
+  `DELEGATION_PROTOCOLS`, `PROOF_KINDS` and `MANDATE_SCHEMES`, and their types.
+- **Operations:** `startOperation` takes `access` (`read`, `write`, `destructive`) and `scopeRequired`; `finish` takes
+  `insufficientScope`. Charges and transactions take `mandateRef` (AP2 or ACP, by reference).
+- **MCP:** client facts are read from each request's `_meta` (MCP 2026-07-28: protocol version, `clientInfo`,
+  capabilities), per request; `initialize` still works. Tool annotations from `tools/list` set `access` on
+  `tools/call`, in both roles. `authInfo` now also sends `client_id` (the client id, raw) and `scopes`; the token is
+  never read. With `withMcpTelemetry`, a 403 `insufficient_scope` challenge records the required scopes.
+- **A2A:** `withA2ATelemetry` records the required scopes of a 403 `insufficient_scope` challenge.
+
 ## 0.2.1 — 2026-10-06
 
 - **Security:** trailing slashes of the endpoint URL and trailing zeros of currency amounts are trimmed with a linear

@@ -52,3 +52,18 @@ export type Json = Record<string, unknown>;
 
 /** A plain object: not null and not an array. For JSON bodies and wire shapes. */
 export const isRecord = (value: unknown): value is Json => value !== null && typeof value === 'object' && !Array.isArray(value);
+
+/** One OAuth scope (RFC 6749 `scope-token`): printable ASCII except space, `"` and `\`, at most 128 characters. */
+export const SCOPE = /^[\x21\x23-\x5b\x5d-\x7e]{1,128}$/;
+
+/** A request header name as forwarded with a signed request: lower-case token characters. */
+export const HEADER_NAME = /^[a-z0-9!#$%&'*+.^_`|~-]{1,64}$/;
+
+/** An HTTP method as forwarded with a signed request. */
+export const HTTP_METHOD = /^[A-Za-z]{1,16}$/;
+
+/** A compact JWS (`header.payload.signature`; the payload may be detached, so empty). */
+export const COMPACT_JWS = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+$/;
+
+/** A short failure reason code: `expired`, `bad_signature`. */
+export const REASON_CODE = /^[a-z0-9_.-]{1,64}$/;

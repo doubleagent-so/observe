@@ -476,6 +476,15 @@ describe('withA2ATelemetry', () => {
       expect(await finishedFor(() => Response.json({ error: 'login' }, { status: 401 }))).toMatchObject([{ outcome: 'auth_rejected' }]);
     });
 
+    it('records the scopes a 403 insufficient_scope challenge asks for', async () => {
+      const headers = { 'www-authenticate': 'Bearer error="insufficient_scope", scope="tasks:write"' };
+      expect(await finishedFor(() => new Response('denied', { status: 403, headers }))).toMatchObject([
+        { outcome: 'auth_rejected', insufficient_scope: { required: ['tasks:write'] } },
+      ]);
+      const [unauthorized] = await finishedFor(() => new Response('login', { status: 401, headers }));
+      expect(unauthorized).not.toHaveProperty('insufficient_scope');
+    });
+
     it('records an event-stream error status as an HTTP error and passes the stream through unchanged', async () => {
       const { recorder, schedule, settle, events, batches } = setup();
       const body = `data: ${JSON.stringify({ jsonrpc: '2.0', id: 1, result: completedTask })}\n\n`;

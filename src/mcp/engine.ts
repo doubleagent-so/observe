@@ -6,11 +6,12 @@
  * Example (server role): peer `{ id: 1, method: 'tools/call', params: { name: 'search' } }` starts an inbound `tool`
  * operation pending under `peer:1`; our `{ id: 1, result: { content: [] } }` finishes it `ok`.
  */
-import { LIMITS, type Binding, type Direction, type Kind, type McpBlock } from '../contract.ts';
+import { LIMITS, type Access, type Binding, type Direction, type Kind, type McpBlock } from '../contract.ts';
+import { scopeList } from '../evidence.ts';
 import { failureReason, guardLog, type Log } from '../http.ts';
 import { isRecord, METHOD } from '../patterns.ts';
 import type { CounterpartyInput, FinishInput, OperationHandle, Recorder } from '../recorder.ts';
-import { recorderState, type RecorderState } from '../state.ts';
+import { Lru, recorderState, type RecorderState } from '../state.ts';
 import {
   TOOL_ERROR,
   X402_PAYMENT_META,
@@ -25,12 +26,15 @@ import {
   mcpPeerInfo,
   mcpRequestId,
   mcpRequestMessages,
+  mcpRequestPeer,
   mcpResultMessages,
   mcpTarget,
   mcpTask,
+  mcpToolAccess,
   mcpVersion,
   nativeRef,
   type McpMessage,
+  type McpRequestPeer,
   type McpTaskObservation,
 } from './mapping.ts';
 import type { InflightScope } from './inflight.ts';
@@ -88,7 +92,7 @@ export interface EngineOptions {
 
 export interface ObserveContext {
   session: McpSession;
-  /** The SDK's `extra.authInfo` for a received message. Only `clientId` is read; the token never is. */
+  /** The SDK's `extra.authInfo` for a received message. Only `clientId` and `scopes` are read; the token never is. */
   authInfo?: unknown;
   /** The `MCP-Protocol-Version` header, when the transport has one. */
   versionHint?: string | null;
@@ -118,6 +122,10 @@ export interface OperationExtra {
   mcp?: McpBlock;
   requestId?: string | number;
   params?: unknown;
+  /** Server role: what this request's `_meta` says about the client (MCP 2026-07-28). */
+  peer?: McpRequestPeer;
+  /** A `tools/call` of a tool whose annotations the server listed. */
+  access?: Access;
 }
 
 export interface McpEngine {
@@ -134,6 +142,9 @@ export interface McpEngine {
 type RpcRequest = Extract<McpMessage, { type: 'request' }>;
 type RpcResponse = Extract<McpMessage, { type: 'result' | 'error' }>;
 type RpcNotification = Extract<McpMessage, { type: 'notification' }>;
+
+/** Tools whose access is remembered per server, from its `tools/list` results; the least recently used is forgotten. */
+const MAX_TOOLS = 1_000;
 
 /** What MCP servers assume when an HTTP request carries no `MCP-Protocol-Version`. */
 const HTTP_DEFAULT_VERSION = '2025-03-26';
@@ -175,6 +186,8 @@ class Engine implements McpEngine {
   readonly #serverUrl: string | undefined;
   readonly #fallbackVersion: string;
   readonly #pending: PendingRequests;
+  /** The server's tools by name (as recorded in `target`) → their access, from `tools/list` annotations. */
+  readonly #toolAccess = new Lru<Access>(MAX_TOOLS);
 
   constructor(options: EngineOptions) {
     this.#options = options;
@@ -194,7 +207,7 @@ class Engine implements McpEngine {
     return recorderState(this.#options.recorder, 'mcp', direction);
   }
 
-  #evidence(context: ObserveContext): CounterpartyInput {
+  #evidence(context: ObserveContext, peer: McpRequestPeer | undefined): CounterpartyInput {
     const { session } = context;
     if (this.#options.role === 'client') {
       return {
@@ -203,24 +216,48 @@ class Engine implements McpEngine {
         ...context.counterparty,
       };
     }
-    // Per request: a principal proven on one request says nothing about the next one.
-    const subject = isRecord(context.authInfo) ? wholeId(context.authInfo.clientId) : undefined;
-    const advertised = session.requestedVersion
+    // Per request: a principal proven on one request says nothing about the next one. So is what a request's `_meta`
+    // says about its client (MCP 2026-07-28); without it, what `initialize` said for the session.
+    const clientInfo = peer?.clientInfo ?? session.clientInfo;
+    const version = peer?.version ?? session.requestedVersion;
+    const advertised = version
       ? [
           {
             name: 'mcp' as const,
-            versions: [session.requestedVersion],
+            versions: [version],
             bindings: [this.#options.binding],
-            capabilities: session.capabilities,
+            capabilities: peer?.capabilities ?? session.capabilities,
           },
         ]
       : undefined;
+    const authenticated = this.#authenticated(context.authInfo);
     return {
-      ...(session.clientInfo ? { client_info: session.clientInfo } : {}),
-      ...(subject ? { authenticated: { issuer: this.#issuer, subject } } : {}),
+      ...(clientInfo ? { client_info: clientInfo } : {}),
+      ...(authenticated ? { authenticated } : {}),
       ...(advertised ? { advertised_protocols: advertised } : {}),
       ...context.counterparty,
     };
+  }
+
+  /** The SDK's `authInfo`: `clientId` as the subject and the client id, with its granted `scopes`. Never the token. */
+  #authenticated(authInfo: unknown): CounterpartyInput['authenticated'] {
+    if (!isRecord(authInfo)) return undefined;
+    const subject = wholeId(authInfo.clientId);
+    if (!subject) return undefined;
+    const scopes = scopeList(authInfo.scopes);
+    return { issuer: this.#issuer, subject, client_id: subject, ...(scopes?.length ? { scopes } : {}) };
+  }
+
+  /** Server role: a `tools/list` result teaches each listed tool's access; a tool listed without annotations has none. */
+  #learnTools(result: unknown): void {
+    if (!isRecord(result) || !Array.isArray(result.tools)) return;
+    for (const tool of result.tools.slice(0, MAX_TOOLS)) {
+      const name = isRecord(tool) ? bounded(tool.name, LIMITS.target) : undefined;
+      if (!name) continue;
+      const access = mcpToolAccess(tool);
+      if (access) this.#toolAccess.set(name, access);
+      else this.#toolAccess.delete(name);
+    }
   }
 
   /** `value` through the host's redaction and checked like the original; dropped and logged when redaction throws. */
@@ -286,9 +323,10 @@ class Engine implements McpEngine {
       ...(extra.target ? { target: extra.target } : {}),
       ...(conversationRef ? { conversationRef } : {}),
       ...(extra.taskRef ? { taskRef: extra.taskRef } : {}),
-      counterparty: this.#evidence(context),
+      counterparty: this.#evidence(context, extra.peer),
       ...(context.startedAt !== undefined ? { startedAt: context.startedAt } : {}),
       ...(mcp ? { mcp } : {}),
+      ...(extra.access ? { access: extra.access } : {}),
     });
     this.#notifyHook(op, { method, kind, direction, ...hookDetails(extra, conversationRef) });
     return op;
@@ -305,26 +343,50 @@ class Engine implements McpEngine {
     session.capabilities = mcpCapabilities(message.params.capabilities);
   }
 
+  /** Server role: what a peer request's `_meta` says about its client, with the client info redacted like `initialize`'s. */
+  #requestPeer(origin: Origin, params: unknown): McpRequestPeer | undefined {
+    if (origin !== 'peer' || this.#options.role !== 'server') return undefined;
+    const peer = mcpRequestPeer(params);
+    if (!peer) return undefined;
+    const { clientInfo, ...rest } = peer;
+    const redacted = this.#redacted(this.#options.redactIds?.clientInfo, clientInfo, mcpPeerInfo);
+    return { ...rest, ...(redacted ? { clientInfo: redacted } : {}) };
+  }
+
+  /** The `mcp` block's client facts: this request's `_meta`, else (on `initialize`) what it announced. */
+  #clientBlock(origin: Origin, method: string, peer: McpRequestPeer | undefined, session: McpSession): McpBlock {
+    if (peer?.clientInfo || peer?.capabilities) {
+      return {
+        ...(peer.clientInfo ? { client_info: peer.clientInfo } : {}),
+        ...(peer.capabilities ? { capabilities: peer.capabilities } : {}),
+      };
+    }
+    const announced = method === 'initialize' && origin === 'peer' && this.#options.role === 'server' ? session.clientInfo : undefined;
+    return announced ? { client_info: announced, capabilities: session.capabilities } : {};
+  }
+
   /** What a request adds to its operation. Reads the params only; a hostile value throws before anything starts. */
   #requestExtra(origin: Origin, message: RpcRequest, session: McpSession): OperationExtra {
     const { method } = message;
     const params = isRecord(message.params) ? message.params : {};
-    const isInitialize = method === 'initialize';
     const target = mcpTarget(method, params);
     const taskRef = method.startsWith('tasks/') ? this.#taskRef(params.taskId) : undefined;
-    const requestedVersion = isInitialize ? mcpVersion(params.protocolVersion) : undefined;
-    const announced = isInitialize && origin === 'peer' && this.#options.role === 'server' ? session.clientInfo : undefined;
+    const peer = this.#requestPeer(origin, params);
+    const version = (method === 'initialize' ? mcpVersion(params.protocolVersion) : undefined) ?? peer?.version;
+    const access = method === 'tools/call' && target ? this.#toolAccess.get(target) : undefined;
     const requestId = this.#redacted(this.#options.redactIds?.requestId, mcpRequestId(message.id), mcpRequestId);
     return {
-      ...(requestedVersion ? { version: requestedVersion } : {}),
+      ...(version ? { version } : {}),
       ...(target ? { target } : {}),
       ...(taskRef ? { taskRef } : {}),
       mcp: {
         ...(requestId ? { request_id: requestId } : {}),
-        ...(announced ? { client_info: announced, capabilities: session.capabilities } : {}),
+        ...this.#clientBlock(origin, method, peer, session),
       },
       requestId: message.id,
       params: message.params,
+      ...(peer ? { peer } : {}),
+      ...(access ? { access } : {}),
     };
   }
 
@@ -379,6 +441,7 @@ class Engine implements McpEngine {
     if (message.type === 'error') return op.finish({ outcome: 'protocol_error', error: mcpError(message.error), ...metrics });
     const { result } = message;
     if (method === 'initialize') this.#learnFromInitializeResult(result, session);
+    if (method === 'tools/list') this.#learnTools(result);
     for (const input of mcpResultMessages(method, result)) op.message(input);
     const task = this.#task(result);
     if (task) this.#recordTaskState(this.#stateFor(directionOf(requester)), op, task);

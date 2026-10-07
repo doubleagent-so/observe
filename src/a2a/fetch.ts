@@ -12,6 +12,7 @@ import {
   readLimited,
   type LimitedRead,
 } from '../http.ts';
+import { insufficientScope } from '../evidence.ts';
 import type { ChargeInput } from '../money.ts';
 import { x402Charge, x402Evidence } from '../payments.ts';
 import type { CounterpartyInput, FinishInput, OperationHandle, Recorder } from '../recorder.ts';
@@ -103,7 +104,7 @@ const statusFinish = (response: Response): FinishInput =>
  * status is an HTTP error: its events are not observed, as for any error status without a JSON-RPC error.
  */
 function immediateFinish(request: Request, response: Response): FinishInput | null {
-  if (response.status === 401 || response.status === 403) return { outcome: 'auth_rejected' };
+  if (response.status === 401 || response.status === 403) return { outcome: 'auth_rejected', ...insufficientScope(response) };
   if (request.method === 'GET' || (response.status >= 400 && isEventStream(response))) return statusFinish(response);
   return null;
 }
