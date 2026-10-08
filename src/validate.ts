@@ -3,53 +3,51 @@
  * server cannot drift. Every check is an allowlist: unknown keys are rejected, never ignored.
  */
 import {
-  BINDINGS,
+  ACCESS_LEVELS,
   CAPABILITIES,
   COST_CATEGORIES,
   DIRECTIONS,
   EVENT_TYPES,
   KINDS,
   LIMITS,
+  MANDATE_SCHEMES,
   MONEY_BASES,
   OUTCOMES,
   PART_KINDS,
   PAYMENT_METHODS,
   ROLES,
-  SIGNATURE_SCHEMES,
   TASK_STATES,
   TRANSACTION_KINDS,
   TRANSACTION_STATUSES,
   exceedsDepth,
   isMoneyEvent,
   utf8Bytes,
-  type AdvertisedProtocol,
   type AgentEvent,
-  type CounterpartyEvidence,
   type EventType,
-  type Protocol,
   type ProtocolName,
 } from './contract.ts';
 import { CURRENCY } from './currency.ts';
 import { MEDIA_TYPE } from './media-type.ts';
-import { CONTROL, isRecord, MAX_COUNT, METHOD, NATIVE_ID, NETWORK, PROTOCOL_VERSION } from './patterns.ts';
+import { isRecord, METHOD, NATIVE_ID, NETWORK } from './patterns.ts';
+import { counterparty, scopes } from './validate-counterparty.ts';
+import {
+  Rejection,
+  clientInfo,
+  count,
+  list,
+  object,
+  oneOf,
+  onlyKeys,
+  optionalCount,
+  optionalText,
+  pattern,
+  protocol,
+  text,
+  time,
+  type RejectionCode,
+} from './validate-rules.ts';
 
-export type RejectionCode =
-  | 'invalid_event'
-  | 'unknown_field'
-  | 'invalid_id'
-  | 'invalid_time'
-  | 'time_out_of_range'
-  | 'invalid_protocol'
-  | 'invalid_field'
-  | 'invalid_counterparty'
-  | 'invalid_protocol_block'
-  | 'invalid_parts'
-  | 'invalid_content'
-  | 'content_too_large'
-  | 'event_too_large'
-  | 'invalid_amount'
-  | 'invalid_currency'
-  | 'missing_link';
+export type { RejectionCode } from './validate-rules.ts';
 export type BatchErrorCode = 'invalid_batch' | 'too_many_events' | 'invalid_adapter';
 
 export type EventResult = { ok: true; event: AgentEvent } | { ok: false; code: RejectionCode };
@@ -63,18 +61,9 @@ export type BatchResult =
       rejected: { index: number; code: RejectionCode }[];
     };
 
-class Rejection extends Error {
-  constructor(readonly code: RejectionCode) {
-    super(code);
-  }
-}
-
 const ULID = /^[0-9A-HJKMNP-TV-Z]{26}$/;
-const CUSTOM_PROTOCOL = /^custom:[a-z0-9-]{1,32}$/;
 const CUSTOM_KEY = /^[a-z0-9_]{1,32}$/;
-const HEX64 = /^[a-f0-9]{64}$/;
 const ADAPTER = /^[A-Za-z0-9@._/+-]{1,64}$/;
-const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
 /** A processor name: `stripe`, `coinbase`. */
 const SLUG = /^[a-z0-9][a-z0-9._:-]{0,63}$/;
 
@@ -93,8 +82,17 @@ const ENVELOPE = [
   'custom',
 ];
 const FIELDS: Record<EventType, string[]> = {
-  'operation.started': ['method', 'kind', 'target', 'counterparty', 'request_bytes'],
-  'operation.finished': ['outcome', 'started_at', 'duration_ms', 'first_byte_ms', 'stream_events', 'response_bytes', 'error'],
+  'operation.started': ['method', 'kind', 'target', 'counterparty', 'request_bytes', 'access', 'scope_required'],
+  'operation.finished': [
+    'outcome',
+    'started_at',
+    'duration_ms',
+    'first_byte_ms',
+    'stream_events',
+    'response_bytes',
+    'error',
+    'insufficient_scope',
+  ],
   'message.observed': ['message_id', 'role', 'artifact', 'parts', 'content'],
   'task.state_changed': ['state', 'native_state', 'reason'],
   'transaction.recorded': [
@@ -108,81 +106,10 @@ const FIELDS: Record<EventType, string[]> = {
     'basis',
     'status',
     'external_ref',
+    'mandate_ref',
   ],
   'cost.recorded': ['category', 'amount_micros', 'currency', 'basis', 'usage'],
 };
-
-function object(value: unknown, code: RejectionCode): Record<string, unknown> {
-  if (!isRecord(value)) throw new Rejection(code);
-  return value;
-}
-
-function onlyKeys(value: Record<string, unknown>, allowed: readonly string[], code: RejectionCode): void {
-  for (const key of Object.keys(value)) if (!allowed.includes(key)) throw new Rejection(code);
-}
-
-function text(value: unknown, max: number, code: RejectionCode): string {
-  if (typeof value !== 'string' || !value || value.length > max || CONTROL.test(value)) throw new Rejection(code);
-  return value;
-}
-
-function optionalText(value: unknown, max: number, code: RejectionCode): string | undefined {
-  return value === undefined ? undefined : text(value, max, code);
-}
-
-function pattern(value: unknown, regex: RegExp, code: RejectionCode): string {
-  if (typeof value !== 'string' || !regex.test(value)) throw new Rejection(code);
-  return value;
-}
-
-function oneOf<Value extends string>(value: unknown, values: readonly Value[], code: RejectionCode): Value {
-  if (typeof value !== 'string' || !(values as readonly string[]).includes(value)) throw new Rejection(code);
-  return value as Value;
-}
-
-function count(value: unknown, code: RejectionCode): number {
-  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > MAX_COUNT) throw new Rejection(code);
-  return value;
-}
-
-function optionalCount(value: unknown, code: RejectionCode): number | undefined {
-  return value === undefined ? undefined : count(value, code);
-}
-
-function list<Item>(value: unknown, max: number, item: (entry: unknown) => Item, code: RejectionCode): Item[] {
-  if (!Array.isArray(value) || value.length > max) throw new Rejection(code);
-  return value.map(item);
-}
-
-/** An ISO-8601 time in epoch milliseconds. */
-function time(value: unknown): number {
-  if (typeof value !== 'string' || !ISO_TIME.test(value)) throw new Rejection('invalid_time');
-  const ms = Date.parse(value);
-  if (!Number.isFinite(ms)) throw new Rejection('invalid_time');
-  return ms;
-}
-
-function protocolName(value: unknown, code: RejectionCode): ProtocolName {
-  if (value === 'a2a' || value === 'mcp') return value;
-  return pattern(value, CUSTOM_PROTOCOL, code) as ProtocolName;
-}
-
-function protocol(value: unknown): Protocol {
-  const input = object(value, 'invalid_protocol');
-  onlyKeys(input, ['name', 'version', 'binding'], 'invalid_protocol');
-  return {
-    name: protocolName(input.name, 'invalid_protocol'),
-    version: pattern(input.version, PROTOCOL_VERSION, 'invalid_protocol'),
-    binding: oneOf(input.binding, BINDINGS, 'invalid_protocol'),
-  };
-}
-
-function clientInfo(value: unknown, code: RejectionCode): { name: string; version?: string } {
-  const input = object(value, code);
-  onlyKeys(input, ['name', 'version'], code);
-  const version = optionalText(input.version, LIMITS.peerVersion, code);
-  return { name: text(input.name, LIMITS.target, code), ...(version ? { version } : {}) };
-}
 
 function a2aBlock(value: unknown): void {
   const code = 'invalid_protocol_block';
@@ -236,60 +163,6 @@ function blocks(input: Record<string, unknown>, name: ProtocolName): void {
     if (!name.startsWith('custom:')) throw new Rejection('invalid_protocol_block');
     customBlock(input.custom);
   }
-}
-
-function url(value: unknown, code: RejectionCode): string {
-  const raw = text(value, LIMITS.url, code);
-  let parsed: URL;
-  try {
-    parsed = new URL(raw);
-  } catch {
-    throw new Rejection(code);
-  }
-  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') throw new Rejection(code);
-  return raw;
-}
-
-function advertised(value: unknown): AdvertisedProtocol {
-  const code = 'invalid_counterparty';
-  const input = object(value, code);
-  onlyKeys(input, ['name', 'versions', 'bindings', 'capabilities'], code);
-  return {
-    name: protocolName(input.name, code),
-    versions: list(input.versions, 8, (entry) => pattern(entry, PROTOCOL_VERSION, code), code),
-    bindings: list(input.bindings, 8, (entry) => oneOf(entry, BINDINGS, code), code),
-    capabilities: list(input.capabilities, LIMITS.listItems, (entry) => oneOf(entry, CAPABILITIES, code), code),
-  };
-}
-
-function counterparty(value: unknown): CounterpartyEvidence {
-  const code = 'invalid_counterparty';
-  const input = object(value, code);
-  onlyKeys(input, ['card_url', 'declared_name', 'client_info', 'authenticated', 'signature', 'network', 'advertised_protocols'], code);
-  if (input.card_url !== undefined) url(input.card_url, code);
-  if (input.declared_name !== undefined) text(input.declared_name, 128, code);
-  if (input.client_info !== undefined) clientInfo(input.client_info, code);
-  if (input.authenticated !== undefined) {
-    const auth = object(input.authenticated, code);
-    onlyKeys(auth, ['issuer', 'subject_hash'], code);
-    text(auth.issuer, LIMITS.issuer, code);
-    pattern(auth.subject_hash, HEX64, code);
-  }
-  if (input.signature !== undefined) {
-    const signature = object(input.signature, code);
-    onlyKeys(signature, ['scheme', 'key_id', 'verified_by'], code);
-    oneOf(signature.scheme, SIGNATURE_SCHEMES, code);
-    text(signature.key_id, 256, code);
-    if (signature.verified_by !== 'reporter') throw new Rejection(code);
-  }
-  if (input.network !== undefined) {
-    const network = object(input.network, code);
-    onlyKeys(network, ['ip_prefix_hash', 'ua_family'], code);
-    pattern(network.ip_prefix_hash, HEX64, code);
-    optionalText(network.ua_family, 64, code);
-  }
-  if (input.advertised_protocols !== undefined) list(input.advertised_protocols, LIMITS.protocols, advertised, code);
-  return input as CounterpartyEvidence;
 }
 
 function partSummary(value: unknown): void {
@@ -372,6 +245,12 @@ function transactionFields(input: Record<string, unknown>): void {
   if (input.processor !== undefined) pattern(input.processor, SLUG, code);
   if (input.network !== undefined) pattern(input.network, NETWORK, code);
   optionalText(input.external_ref, 256, code);
+  if (input.mandate_ref !== undefined) {
+    const mandate = object(input.mandate_ref, code);
+    onlyKeys(mandate, ['scheme', 'ref'], code);
+    oneOf(mandate.scheme, MANDATE_SCHEMES, code);
+    text(mandate.ref, LIMITS.mandateRef, code);
+  }
 }
 
 function typeFields(input: Record<string, unknown>, type: EventType): void {
@@ -382,6 +261,8 @@ function typeFields(input: Record<string, unknown>, type: EventType): void {
     optionalText(input.target, LIMITS.target, code);
     counterparty(input.counterparty);
     optionalCount(input.request_bytes, code);
+    if (input.access !== undefined) oneOf(input.access, ACCESS_LEVELS, code);
+    if (input.scope_required !== undefined) scopes(input.scope_required, code);
   } else if (type === 'operation.finished') {
     oneOf(input.outcome, OUTCOMES, code);
     time(input.started_at);
@@ -392,6 +273,11 @@ function typeFields(input: Record<string, unknown>, type: EventType): void {
       onlyKeys(error, ['native_code', 'code'], code);
       text(error.native_code, 64, code);
       text(error.code, 64, code);
+    }
+    if (input.insufficient_scope !== undefined) {
+      const challenge = object(input.insufficient_scope, code);
+      onlyKeys(challenge, ['required'], code);
+      scopes(challenge.required, code);
     }
   } else if (type === 'message.observed') {
     pattern(input.message_id, NATIVE_ID, code);

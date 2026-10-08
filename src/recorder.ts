@@ -5,7 +5,20 @@
  * `SubjectHasher` hashes authenticated subjects.
  */
 import type { MessageInput } from './content.ts';
-import type { A2aBlock, CounterpartyEvidence, CustomBlock, Direction, Kind, McpBlock, Outcome, Protocol, TaskState } from './contract.ts';
+import type {
+  A2aBlock,
+  Access,
+  AuthenticatedEvidence,
+  CounterpartyEvidence,
+  CustomBlock,
+  DelegationEvidence,
+  Direction,
+  Kind,
+  McpBlock,
+  Outcome,
+  Protocol,
+  TaskState,
+} from './contract.ts';
 import { Delivery } from './delivery.ts';
 import { defaultLog, failureReason, guardLog, type Log } from './http.ts';
 import { protocolOf, type ChargeInput, type CostInput, type MoneyLinks, type TransactionInput } from './money.ts';
@@ -13,9 +26,19 @@ import { createOperationHandle, recordTransaction, type OperationDependencies } 
 import { SubjectHasher } from './subject-hasher.ts';
 import { trimTrailing } from './text.ts';
 
-export type CounterpartyInput = Omit<CounterpartyEvidence, 'authenticated'> & {
-  /** The host's authenticated principal; `subject` is hashed (HMAC-SHA256, see `subjectKey`) before it leaves the process. */
-  authenticated?: { issuer: string; subject: string };
+/** The host's authenticated principal; `subject` is hashed (HMAC-SHA256, see `subjectKey`) before it leaves the process. */
+export type AuthenticatedInput = Omit<AuthenticatedEvidence, 'subject_hash'> & { subject: string };
+
+/**
+ * The grant the caller acts under. `principal` (the person or account the agent acts for) and `grant_id` are raw and
+ * hashed before they leave the process, like `authenticated.subject`: the principal with the subject formula and the
+ * grant's issuer (so it matches that issuer's authenticated subjects), the grant id as `grant:v1`.
+ */
+export type DelegationInput = Omit<DelegationEvidence, 'principal_hash' | 'grant_id_hash'> & { principal?: string; grant_id?: string };
+
+export type CounterpartyInput = Omit<CounterpartyEvidence, 'authenticated' | 'delegation'> & {
+  authenticated?: AuthenticatedInput;
+  delegation?: DelegationInput;
 };
 
 export interface StartInput {
@@ -33,6 +56,10 @@ export interface StartInput {
   custom?: CustomBlock;
   /** Epoch ms when the operation began, for adapters that learn its conversation only later. Default: now. */
   startedAt?: number;
+  /** What the operation does: `read`, `write` or `destructive`. */
+  access?: Access;
+  /** The scopes the operation needs. */
+  scopeRequired?: string[];
 }
 
 export interface FinishInput {
@@ -43,6 +70,8 @@ export interface FinishInput {
   firstByteMs?: number;
   /** What the response says (A2A: `extensions_activated`); sent on the finished event. */
   a2a?: A2aBlock;
+  /** A 403 `insufficient_scope` challenge: the scopes the server asked for (see `parseInsufficientScope`). */
+  insufficientScope?: { required: string[] };
 }
 
 /** A conversation the response reports (an agent-assigned A2A `contextId`) when the request carried none. */
@@ -111,7 +140,7 @@ export interface FlushOptions {
 export interface RecorderOptions {
   key: string;
   /**
-   * Secret for hashing authenticated subjects (HMAC-SHA256). Default: `key`, which is one per source. Rotating the agent
+   * Secret for hashing authenticated subjects, delegation principals and grant ids (HMAC-SHA256). Default: `key`, which is one per source. Rotating the agent
    * key changes every subject hash unless a stable `subjectKey` is set. Keep it secret: with it, hashes can be matched
    * against guessed subjects.
    */

@@ -111,7 +111,8 @@ symbol); payments in other assets are not recorded. x402 v1 payments do not name
 be USDC, and v1 SVM `exact` payments carry no amount, so they are not recorded. Network ids are kept exactly as sent
 (`eip155:8453`, `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp`). Only the amount, asset, network and transaction hash are
 read, never signatures or payer addresses. Nothing is recorded for 401 and 403 responses or Agent Card requests. AP2
-payment mandates are not recorded; report AP2 payments with `op.charge` or `recorder.transaction`.
+payment mandates are not parsed; report AP2 payments with `op.charge` or `recorder.transaction`, and link the mandate
+by reference with `mandateRef: { scheme: 'ap2', ref }` (see [Revenue and cost](#revenue-and-cost)).
 
 Other options:
 
@@ -177,9 +178,10 @@ called agent activates.
   A method A2A does not define keeps its own name if it is a valid method name, else `unknown`.
 - **Outcomes:** a result is `ok`; a JSON-RPC error is `protocol_error` with its code. An HTTP error status without a
   JSON-RPC error (an HTML 5xx page, 404, 413, 429) is `protocol_error` with code `http_error` and the status as native
-  code; 401 and 403 are `auth_rejected`. When your handler throws, the operation is `protocol_error` with code
-  `internal_error` (an `@a2a-js/sdk` `A2AError` keeps its own reason) and the error is rethrown unchanged. A client
-  disconnect or a broken stream is `transport_error`.
+  code; 401 and 403 are `auth_rejected`, and a 403 with an `insufficient_scope` challenge also records the scopes it
+  asks for (see [Insufficient scope](#access-scopes-and-insufficient-scope)). When your handler throws, the operation
+  is `protocol_error` with code `internal_error` (an `@a2a-js/sdk` `A2AError` keeps its own reason) and the error is
+  rethrown unchanged. A client disconnect or a broken stream is `transport_error`.
 - **Ids:** context, task and message ids are kept only as 1–256 printable ASCII characters without spaces. An id with
   spaces, control or non-ASCII characters is left out, and the operation is still recorded.
 - **Conversations:** a first message sent without a `contextId` is linked to the conversation the agent assigns: the
@@ -229,7 +231,7 @@ await client.connect(transport);
 | `recorder`    | The recorder from `createRecorder`.                                                                                                                           |
 | `role`        | `'server'`: requests received are `inbound`. `'client'`: requests sent are `outbound`. Server-to-client callbacks are the reverse.                            |
 | `binding`     | `'stdio'`, `'sse'`, `'streamable-http'` or `'other'`.                                                                                                         |
-| `issuer`      | Server role: the issuer recorded with the SDK's `authInfo.clientId` (hashed, see [Privacy](#privacy)). Default `mcp`. The token is never read.                |
+| `issuer`      | Server role: the issuer recorded with the SDK's `authInfo` (see [Privacy](#privacy)). Default `mcp`. The token is never read.                                 |
 | `serverUrl`   | Client role: the server's URL. Only its origin (`https://mcp.example`) is recorded, as the counterparty's `card_url`: paths and queries can hold keys.        |
 | `onOperation` | `(op, info) => void`, called as each operation starts (`info`: method, kind, direction, target, `requestId`, `sessionId`, `params`).                          |
 | `redactIds`   | Optional. Replaces the request id, `clientInfo` or task id before they are recorded (see [Redacting MCP ids](#redacting-mcp-ids)). Default: recorded as sent. |
@@ -308,13 +310,24 @@ own request object, so `mcpOperation` returns `undefined`. Wrap the transport wh
   `protocol_error` with its code; `notifications/cancelled` is `canceled`; a closed connection or broken stream with
   the request pending is `transport_error`. With `withMcpTelemetry`, 401 and 403 are `auth_rejected`, other HTTP
   errors `http_error`, and a handler that throws is `protocol_error` with code `internal_error` (native code
-  `exception`); the error is rethrown unchanged.
+  `exception`); the error is rethrown unchanged. A 403 whose `WWW-Authenticate` says `error="insufficient_scope"`
+  (MCP authorization) is `auth_rejected` with `insufficient_scope: { required }`, the scopes the server asked for.
 - **Conversations:** one `Mcp-Session-Id` is one conversation, and so is one stdio connection. Stateless HTTP servers
   report operations without a conversation. An SDK client over Streamable HTTP learns its session ID from the
   `initialize` response, so its own `initialize` has no conversation.
-- **Counterparty:** for servers, the client's `clientInfo`, its requested protocol version and capabilities
-  (`sampling`, `elicitation`, `roots`, `tasks`) from `initialize`, and the principal from `authInfo` on each request;
-  for clients, the server's name and the origin of `serverUrl`.
+- **Counterparty:** for servers, the client's `clientInfo`, protocol version and capabilities (`sampling`,
+  `elicitation`, `roots`, `tasks`). Since MCP 2026-07-28 clients send no `initialize`: every request carries them in
+  `params._meta` (`io.modelcontextprotocol/protocolVersion`, `…/clientInfo`, `…/clientCapabilities`), and they are
+  read per request, for that request only (also into its `mcp` block, and `protocol.version`). Older clients are read
+  from `initialize`, as before; a request's own `_meta` wins. `redactIds.clientInfo` applies to both. `clientInfo` is
+  self-reported: it names the client for display and proves nothing. From the SDK's `authInfo` on each request: the
+  principal (`clientId`, hashed as the subject), the client id itself as `client_id`, and the granted `scopes`; never
+  the token. For clients, the server's name and the origin of `serverUrl`.
+- **Access:** when the adapter sees the server's `tools/list` result (the server's own in the server role, the remote
+  server's in the client role), it remembers each tool's access from its `annotations`, with the MCP defaults:
+  `readOnlyHint: true` is `read`; otherwise `destructiveHint` (default true) is `destructive`, and
+  `destructiveHint: false` is `write`. A tool listed without `annotations` has no access. Each `tools/call` of a listed
+  tool then carries `access`. Up to 1,000 tools are remembered per wrapper; hints are the server's own claims.
 - **Tasks** (MCP 2025-11-25): task-creating results and `notifications/tasks/status` record each task state once per
   change (`cancelled` is recorded as `canceled`, with the native value kept).
 - **Content:** tool arguments, results, prompt and sampling messages, and resource text. Images, audio and binary
@@ -357,6 +370,112 @@ instrumentMcpTransport(transport, {
 Exported types: `McpTransportLike`, `McpTransportOptions`, `McpTelemetryOptions`, `McpHandlerExtra`,
 `McpOperationInfo`, `McpRedactIds`, `McpPeerInfo`, `McpRole` and `OnOperation`.
 
+## Caller identity and grants
+
+Who called, for whom, and proven how. Everything here is optional evidence your host has already verified; the
+recorder never verifies tokens or signatures itself, and never sends a token.
+
+- **`authenticated { issuer, subject, client_id?, actor?, scopes? }`:** the principal your auth middleware verified.
+  `subject` is hashed before it leaves the process. `client_id` is the OAuth client id (or an MCP Client ID Metadata
+  Document URL), `actor` the agent acting for the subject (RFC 8693 `act.sub`, or a PACT personal agent's issuer),
+  `scopes` the token's granted scopes.
+- **`delegation`:** the grant the caller acts under, on behalf of someone: `protocol` (`oauth`, `pact`, `a2a` or
+  `ap2`; PAP is added once its v0.1 specification is published) and optional `issuer`, `principal`, `grant_id`, `actor`, `client_id`, `scopes` (granted), `scopes_used`,
+  `access` (`read` or `write`), `expires_at` (ISO-8601 with milliseconds), `verification`
+  (`{ status: 'verified' | 'failed', by: 'reporter', reason? }`, when you checked the grant yourself) and `proof`
+  (PACT grants only).
+  `principal` and `grant_id` are raw on input and sent only as `principal_hash` and `grant_id_hash`.
+- **`signature`:** a Web Bot Auth or ERC-8128 request signature: `{ scheme, key_id, verified_by: 'reporter' }` when
+  you verified it, or `{ scheme, key_id?, verified_by: 'double_agent', request }` (from `signedRequestEvidence`) for
+  Double Agent to verify.
+
+Limits: client ids up to 2,048 characters, actors and issuers up to 256, at most 32 scopes of up to 128 characters
+each (RFC 6749 scope tokens), proofs up to 8 KiB. The whole event still has to fit in 8 KiB.
+
+### OAuth tokens: `oauthEvidence`
+
+`oauthEvidence(claims, { issuer? })` turns the claims of an access token **you have already verified** (signature,
+audience, expiry) into evidence: `authenticated` from `iss` (or `options.issuer`), `sub`, `client_id` (or `azp`), the
+outermost `act.sub` (nested `act` claims are earlier actors and are ignored) and `scope` (or `scp`). When an `act` claim
+is present, an agent is acting for the subject, so it also returns an `oauth` delegation for `sub`, with `expires_at`
+from `exp`, `grant_id` from a string `grant_id` claim, and `verification: { status: 'verified', by: 'reporter' }`.
+Claims of the wrong type are ignored; it never throws and returns `{}` without an issuer and a subject.
+
+```ts
+import { oauthEvidence } from '@doubleagent-so/observe';
+import { withMcpTelemetry } from '@doubleagent-so/observe/mcp';
+
+export default {
+  fetch: withMcpTelemetry(handleMcp, {
+    recorder,
+    waitUntil: true,
+    // verifyAccessToken is your own: it checks the signature, audience and expiry, and returns the claims.
+    identify: async (request) => oauthEvidence(await verifyAccessToken(request), { issuer: 'https://auth.example.com' }),
+  }),
+};
+```
+
+A token `{ iss, sub: 'alice', client_id: 'travel-app', scope: 'trips:read trips:write', act: { sub: 'agent-7' } }` is
+recorded as `alice` (hashed) acting through `agent-7` with those scopes, under an `oauth` grant.
+
+### Signed requests: `signedRequestEvidence`
+
+`signedRequestEvidence(request)` forwards a Web Bot Auth (`Signature-Input` member tagged `web-bot-auth`) or ERC-8128
+(`erc8128` key id) request signature so Double Agent verifies it itself, instead of trusting your word for it. Only what
+the signature needs is forwarded: the method, the URL (its query only when the signature covers it, never the
+fragment), `Signature`, `Signature-Input`, `Signature-Agent` and the headers the signature covers. If it covers
+`Authorization`, `Cookie` or `Proxy-Authorization`, nothing is forwarded (verifying it would mean sending a
+credential). It returns `{}` when there is no such signature or anything is too large; it never throws.
+
+```ts
+identify: async (request) => ({ ...signedRequestEvidence(request), ...oauthEvidence(await verifyAccessToken(request)) }),
+```
+
+### Grants by hand, and PACT receipts
+
+Pass `delegation` yourself for any other grant. A PACT receipt is a signed record for keeping, not a credential: pass
+it as a `proof` and Double Agent verifies its signature. With A2A it comes in the reply metadata, at
+`pact.receipt.jws`:
+
+```ts
+const receipt = reply.metadata?.['pact.receipt.jws'];
+recorder.startOperation({
+  protocol: { name: 'a2a', version: '1.0', binding: 'jsonrpc-http' },
+  direction: 'outbound',
+  method: 'SendMessage',
+  kind: 'message',
+  counterparty: {
+    card_url: 'https://travel.example/.well-known/agent-card.json',
+    delegation: {
+      protocol: 'pact',
+      principal: user.id, // hashed before it leaves the process
+      scopes: ['trips:book'],
+      access: 'write',
+      ...(typeof receipt === 'string' ? { proof: { kind: 'pact-receipt', jws: receipt } } : {}),
+    },
+  },
+});
+```
+
+**Bearer tokens.** `pact-delegation` and `pact-agent` proofs are live bearer tokens: whoever holds one can act with
+it until it expires. The recorder never sends one by itself; it is sent only when you pass it in `proof`, explicitly.
+Prefer a receipt when you have one.
+
+### Access, scopes and insufficient scope
+
+- `startOperation({ access, scopeRequired })`: what the operation does (`read`, `write` or `destructive`) and the
+  scopes it needs. The MCP adapter sets `access` from tool annotations for you.
+- `op.finish({ outcome: 'auth_rejected', insufficientScope: { required } })`: the server refused for missing scopes.
+  `parseInsufficientScope(wwwAuthenticate)` reads an RFC 6750 challenge into `{ required }`, or `null`: for
+  `Bearer error="insufficient_scope", scope="files:read files:write"` it gives `['files:read', 'files:write']`, with
+  other params and challenges in any order. The MCP and A2A fetch wrappers do this for every 403.
+
+### Server support
+
+These fields are new in this release of the event contract. The Double Agent API accepts them from the release that
+ships with them; an older API rejects an event that carries them, so upgrade the recorder only once your Double Agent
+endpoint accepts them.
+
 ## Privacy
 
 - **Message content is sent by default.** Text and data parts are sent within the [limits](#limits); Double Agent keeps
@@ -370,6 +489,16 @@ Exported types: `McpTransportLike`, `McpTransportOptions`, `McpTelemetryOptions`
   - Rotating the agent key changes every subject hash, so the same caller looks new afterwards. To keep hashes stable
     across rotations, set a stable `subjectKey` (from a secret, such as `DOUBLEAGENT_SUBJECT_KEY`).
   - Keep `subjectKey` secret, like the agent key: anyone holding it can hash guessed subjects and match them.
+- **Grants are hashed the same way.** A delegation's `principal` is hashed like a subject of the grant's issuer (its
+  `issuer`, else the `authenticated` issuer, else none), so it matches that issuer's authenticated subjects; a
+  `grant_id` is hashed as `HMAC-SHA256(subjectKey, "grant:v1\n" + issuer + "\n" + grantId)`. Neither leaves the
+  process raw.
+- **Client ids, actors and scopes are sent unhashed**, as given: they name client software, agents and permissions,
+  not people. This includes the MCP adapter, which sends the SDK's `authInfo.clientId` as `client_id` (beside the
+  hashed subject) and `authInfo.scopes`. If your client ids or actors name people, leave them out.
+- **Proofs and signatures are sent only when you pass them.** A PACT receipt in `delegation.proof`, or the signed
+  request components from `signedRequestEvidence`, are used by Double Agent to verify the signature. Bearer tokens
+  (`pact-delegation`, `pact-agent`) are sent only when you pass them explicitly; access tokens never are.
 - File bytes and file URLs are never sent; a file is recorded by its name, media type and size.
 - **MCP ids are sent as the caller chose them** (request id, `clientInfo`, task id). To drop or replace them, set
   [`redactIds`](#redacting-mcp-ids) on the MCP wrapper.
@@ -474,6 +603,8 @@ recorder.transaction({
 - `basis`: `reported` (your claim), `settled` (confirmed by a provider; only with status `settled` or `refunded`),
   `estimated` (e.g. tokens × price). Reports keep them apart.
 - Refunds are `kind: 'refund'` with a negative amount.
+- `mandateRef: { scheme: 'ap2' | 'acp', ref }` on a charge or transaction links the payment mandate it was made under,
+  by reference only (up to 256 characters); mandate contents are never sent.
 - Every money event is validated when you record it. Invalid input (a fractional or out-of-range amount, a lowercase
   currency, no task or operation) is dropped and logged as `agent_telemetry_invalid_event`; nothing throws and
   nothing waits on the network.
@@ -532,8 +663,9 @@ The recorder buffers events and sends them in batches every 2 seconds (`flushInt
   made unserializable after recording it (by changing an object it passed in) is dropped and counted at send time
   instead of blocking the queue. Events recorded after `shutdown()` are counted as dropped and logged once as
   `agent_telemetry_dropped_after_shutdown`.
-- `authenticated.subject` is hashed (HMAC-SHA256, see [Privacy](#privacy)) before it leaves the process. Raw
-  `Authorization` or signature headers are never treated as identity.
+- `authenticated.subject`, `delegation.principal` and `delegation.grant_id` are hashed (HMAC-SHA256, see
+  [Privacy](#privacy)) before they leave the process. `Authorization`, `Cookie` and `Proxy-Authorization` headers are
+  never read or sent; signature headers are forwarded only through `signedRequestEvidence`.
 - File bytes and file URLs are never sent; a file is recorded by its name, media type and size.
 - MCP request ids, `clientInfo` and task ids are sent as the caller chose them unless you set
   [`redactIds`](#redacting-mcp-ids).
@@ -554,8 +686,8 @@ may name both; `operation_id` is optional only on these two types.
   `kind` (`TRANSACTION_KINDS`), `amount` as an integer in the currency's minor units (cents for USD, yen for JPY,
   millionths for USDC; negative only for a `refund`, within ±10^13), `currency`, `method` (`PAYMENT_METHODS`),
   `basis` (`MONEY_BASES`), `status` (`TRANSACTION_STATUSES`; a `settled` basis needs `settled` or `refunded`), and
-  optional `processor` (lowercase, such as `stripe`) and `network` (kept as sent, such as `eip155:8453`) and
-  `external_ref`.
+  optional `processor` (lowercase, such as `stripe`) and `network` (kept as sent, such as `eip155:8453`),
+  `external_ref` and `mandate_ref` (`{ scheme: 'ap2' | 'acp', ref }`).
 - `cost.recorded`: `category` (`COST_CATEGORIES`), `amount_micros` as an integer in millionths of the currency's
   major unit (0 to 10^15), `currency`, `basis`, and optional `usage` (`model`, `input_tokens`, `output_tokens`,
   `units`, `unit`).
@@ -591,7 +723,10 @@ toMicros(0.0042); // 4200; null for anything finer than a micro
 - MCP: `withMcpTelemetry` keeps the 10,000 most recent sessions per recorder; a session it forgets has its pending
   requests finished as `transport_error`. Each session keeps at most 1,000 pending requests (the oldest beyond that is
   finished as `transport_error`), and a request still pending after an hour is finished as `transport_error` the next
-  time its session is used. Targets, request IDs and client names are cut to 128 characters.
+  time its session is used. Targets, request IDs and client names are cut to 128 characters. Tool access is
+  remembered for up to 1,000 tools per wrapper.
+- Caller identity: at most 32 scopes of 128 characters, client ids up to 2,048 characters, proofs up to 8 KiB, and at
+  most 24 forwarded headers of up to 8 KiB each; the whole event within 8 KiB.
 
 ---
 

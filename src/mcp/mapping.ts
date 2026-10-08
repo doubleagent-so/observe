@@ -8,7 +8,7 @@
  * `tool` operation with target `search` and one `caller` data part `{ q: 'x' }`.
  */
 import type { MessageInput, PartInput } from '../content.ts';
-import { LIMITS, type Capability, type Kind, type Role, type TaskState } from '../contract.ts';
+import { LIMITS, type Access, type Capability, type Kind, type Role, type TaskState } from '../contract.ts';
 import { mediaTypeEssence } from '../media-type.ts';
 import { boundedId, CONTROL, cutText, isRecord, MAX_COUNT, PROTOCOL_VERSION, type Json } from '../patterns.ts';
 
@@ -328,3 +328,40 @@ export const X402_RESPONSE_META = 'x402/payment-response';
 
 /** `value._meta[key]`, for request params and results; undefined when absent. */
 export const mcpMeta = (value: unknown, key: string): unknown => (isRecord(value) && isRecord(value._meta) ? value._meta[key] : undefined);
+
+/** MCP 2026-07-28: every request names its protocol version, and may name the client and its capabilities, in `_meta`. */
+export const PROTOCOL_VERSION_META = 'io.modelcontextprotocol/protocolVersion';
+export const CLIENT_INFO_META = 'io.modelcontextprotocol/clientInfo';
+export const CLIENT_CAPABILITIES_META = 'io.modelcontextprotocol/clientCapabilities';
+
+/** What one request says about its client in `_meta` (MCP 2026-07-28); each part only when present and valid. */
+export interface McpRequestPeer {
+  version?: string;
+  clientInfo?: { name: string; version?: string };
+  capabilities?: Capability[];
+}
+
+/** The request's own client facts from `params._meta`; null when it carries none (a client before 2026-07-28). */
+export function mcpRequestPeer(params: unknown): McpRequestPeer | null {
+  const version = mcpVersion(mcpMeta(params, PROTOCOL_VERSION_META));
+  const clientInfo = mcpPeerInfo(mcpMeta(params, CLIENT_INFO_META));
+  const capabilities = mcpMeta(params, CLIENT_CAPABILITIES_META);
+  if (!version && !clientInfo && !isRecord(capabilities)) return null;
+  return {
+    ...(version ? { version } : {}),
+    ...(clientInfo ? { clientInfo } : {}),
+    ...(isRecord(capabilities) ? { capabilities: mcpCapabilities(capabilities) } : {}),
+  };
+}
+
+/**
+ * What a tool does, from its `annotations` with the MCP defaults: `readOnlyHint: true` is `read`; otherwise
+ * `destructiveHint` (default true) is `destructive`, and `destructiveHint: false` is `write`. A tool without an
+ * `annotations` object says nothing: undefined.
+ */
+export function mcpToolAccess(tool: unknown): Access | undefined {
+  if (!isRecord(tool) || !isRecord(tool.annotations)) return undefined;
+  const { readOnlyHint, destructiveHint } = tool.annotations;
+  if (readOnlyHint === true) return 'read';
+  return destructiveHint === false ? 'write' : 'destructive';
+}

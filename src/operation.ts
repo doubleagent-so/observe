@@ -3,12 +3,12 @@
  * money, finished) and hands them to delivery, which validates each at capture. Never throws into the host.
  */
 import { buildContent, summarizeParts, type MessageInput } from './content.ts';
-import { LIMITS, type AgentEvent } from './contract.ts';
+import { LIMITS, type AgentEvent, type CounterpartyEvidence } from './contract.ts';
 import type { Delivery } from './delivery.ts';
 import { failureReason, type Log } from './http.ts';
 import { costEvent, transactionEvent, type ChargeInput, type CostInput, type MoneyLinks, type TransactionInput } from './money.ts';
 import { normalizeText } from './patterns.ts';
-import type { ConversationInput, FinishInput, OperationHandle, StartInput, TaskStateInput } from './recorder.ts';
+import type { ConversationInput, CounterpartyInput, FinishInput, OperationHandle, StartInput, TaskStateInput } from './recorder.ts';
 import type { SubjectHasher } from './subject-hasher.ts';
 import { ulid } from './ulid.ts';
 
@@ -24,7 +24,7 @@ export interface OperationDependencies {
 }
 
 const iso = (ms: number): string => new Date(ms).toISOString();
-/** Stands in for the subject hash while an event is validated at capture; never sent. */
+/** Stands in for a hash while an event is validated at capture; never sent. */
 const PLACEHOLDER_HASH = '0'.repeat(64);
 const withReason = (reason: string | undefined): { reason?: string } => (reason ? { reason } : {});
 
@@ -48,31 +48,73 @@ export function recordTransaction(
   return delivery.push(() => transactionEvent(links, { ...input, transactionId }, at)) ? transactionId : '';
 }
 
-/** The `operation.started` event, deferred when the counterparty's subject must be hashed in the flush that sends it. */
-function startedEvent(input: StartInput, envelope: Record<string, unknown>, hasher: SubjectHasher) {
-  const { authenticated, ...declared } = input.counterparty ?? {};
-  const event = {
-    ...envelope,
-    type: 'operation.started',
-    method: input.method,
-    kind: input.kind,
-    ...(input.target ? { target: input.target } : {}),
-    counterparty: declared,
-    ...(input.requestBytes !== undefined ? { request_bytes: input.requestBytes } : {}),
-    ...(input.a2a ? { a2a: input.a2a } : {}),
-    ...(input.mcp ? { mcp: input.mcp } : {}),
-    ...(input.custom ? { custom: input.custom } : {}),
-  } as AgentEvent;
-  if (!authenticated) return event;
-  // Validated at capture with a placeholder hash; only the real hash waits for the flush.
-  const { issuer, subject } = authenticated;
+/** The hashes that replace a counterparty's raw identifiers. */
+interface IdentityHashes {
+  subject?: string;
+  principal?: string;
+  grant?: string;
+}
+
+/** The counterparty as sent: raw subject, principal and grant id replaced by their hashes. Pure. */
+function sentCounterparty(input: CounterpartyInput, hashes: IdentityHashes): CounterpartyEvidence {
+  const { authenticated, delegation, ...declared } = input;
+  const sent: CounterpartyEvidence = declared;
+  if (authenticated) {
+    const { subject: _subject, ...rest } = authenticated;
+    sent.authenticated = { ...rest, subject_hash: hashes.subject ?? PLACEHOLDER_HASH };
+  }
+  if (delegation) {
+    const { principal, grant_id: grantId, ...rest } = delegation;
+    sent.delegation = {
+      ...rest,
+      ...(principal !== undefined ? { principal_hash: hashes.principal ?? PLACEHOLDER_HASH } : {}),
+      ...(grantId !== undefined ? { grant_id_hash: hashes.grant ?? PLACEHOLDER_HASH } : {}),
+    };
+  }
+  return sent;
+}
+
+/**
+ * Hashes a counterparty's raw identifiers. A delegation is keyed by its own issuer, else the authenticated issuer,
+ * else none, so a principal matches the same issuer's authenticated subjects.
+ */
+async function identityHashes(input: CounterpartyInput, hasher: SubjectHasher): Promise<IdentityHashes> {
+  const { authenticated, delegation } = input;
+  const grantIssuer = delegation?.issuer ?? authenticated?.issuer ?? '';
   return {
-    probe: { ...event, counterparty: { ...declared, authenticated: { issuer, subject_hash: PLACEHOLDER_HASH } } } as AgentEvent,
+    ...(authenticated ? { subject: await hasher.hash(authenticated.issuer, authenticated.subject) } : {}),
+    ...(delegation?.principal !== undefined ? { principal: await hasher.hash(grantIssuer, delegation.principal) } : {}),
+    ...(delegation?.grant_id !== undefined ? { grant: await hasher.hashGrant(grantIssuer, delegation.grant_id) } : {}),
+  };
+}
+
+/** The operation's own fields of `operation.started`, without the counterparty. */
+const startedFields = (input: StartInput) => ({
+  type: 'operation.started' as const,
+  method: input.method,
+  kind: input.kind,
+  ...(input.target ? { target: input.target } : {}),
+  ...(input.requestBytes !== undefined ? { request_bytes: input.requestBytes } : {}),
+  ...(input.access ? { access: input.access } : {}),
+  ...(input.scopeRequired ? { scope_required: input.scopeRequired } : {}),
+  ...(input.a2a ? { a2a: input.a2a } : {}),
+  ...(input.mcp ? { mcp: input.mcp } : {}),
+  ...(input.custom ? { custom: input.custom } : {}),
+});
+
+/**
+ * The `operation.started` event, deferred when the counterparty carries raw identifiers (an authenticated subject, a
+ * delegation's principal or grant id) that are hashed in the flush that sends it.
+ */
+function startedEvent(input: StartInput, envelope: Record<string, unknown>, hasher: SubjectHasher) {
+  const counterparty = input.counterparty ?? {};
+  const event = { ...envelope, ...startedFields(input) };
+  if (!counterparty.authenticated && !counterparty.delegation) return { ...event, counterparty } as AgentEvent;
+  // Validated at capture with placeholder hashes; only the real hashes wait for the flush.
+  return {
+    probe: { ...event, counterparty: sentCounterparty(counterparty, {}) } as AgentEvent,
     complete: async () =>
-      ({
-        ...event,
-        counterparty: { ...declared, authenticated: { issuer, subject_hash: await hasher.hash(issuer, subject) } },
-      }) as AgentEvent,
+      ({ ...event, counterparty: sentCounterparty(counterparty, await identityHashes(counterparty, hasher)) }) as AgentEvent,
   };
 }
 
@@ -87,6 +129,7 @@ const finishedFields = (result: FinishInput, startedAt: number, at: number) => (
   ...(result.responseBytes !== undefined ? { response_bytes: result.responseBytes } : {}),
   ...(result.error ? { error: { native_code: result.error.nativeCode, code: result.error.code } } : {}),
   ...(result.a2a ? { a2a: result.a2a } : {}),
+  ...(result.insufficientScope ? { insufficient_scope: { required: result.insufficientScope.required } } : {}),
 });
 
 /** One recorded operation: its identity, counters and the events it builds. Wrapped by a plain-object handle. */

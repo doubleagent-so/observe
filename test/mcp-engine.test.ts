@@ -63,7 +63,7 @@ describe('server role', () => {
       mcp: { request_id: '1' },
       counterparty: {
         client_info: { name: 'claude-ai', version: '0.1.0' },
-        authenticated: { issuer: 'mcp', subject_hash: await subjectHash('mcp', 'svc-1') },
+        authenticated: { issuer: 'mcp', subject_hash: await subjectHash('mcp', 'svc-1'), client_id: 'svc-1' },
         advertised_protocols: [
           { name: 'mcp', versions: ['2025-11-25'], bindings: ['streamable-http'], capabilities: ['sampling', 'elicitation'] },
         ],
@@ -79,7 +79,7 @@ describe('server role', () => {
     expect(sampling.start).toMatchObject({ direction: 'outbound', kind: 'callback', conversation_ref: 'session-1' });
     expect(sampling.messages.map((message) => message.role)).toEqual(['caller', 'agent']);
     expect(sampling.finish).toMatchObject({ outcome: 'ok' });
-    expect(JSON.stringify(batches)).not.toMatch(/svc-1|secret-token/);
+    expect(JSON.stringify(batches)).not.toMatch(/secret-token/);
     expectValid(batches);
   });
 
@@ -408,7 +408,11 @@ describe('review fixes', () => {
     engine.observe('peer', req(2, 'ping'), { session });
     engine.observe('peer', req(3, 'ping'), { session, authInfo: { clientId: 'x'.repeat(300) } });
     const pings = starts(await settle());
-    expect(pings[0].counterparty.authenticated).toEqual({ issuer: 'mcp', subject_hash: await subjectHash('mcp', 'svc-1') });
+    expect(pings[0].counterparty.authenticated).toEqual({
+      issuer: 'mcp',
+      subject_hash: await subjectHash('mcp', 'svc-1'),
+      client_id: 'svc-1',
+    });
     expect(pings[1].counterparty).not.toHaveProperty('authenticated');
     expect(pings[2].counterparty).not.toHaveProperty('authenticated');
   });

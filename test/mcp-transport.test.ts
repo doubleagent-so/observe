@@ -19,7 +19,7 @@ function tap(transport: InMemoryTransport, wire: string[], auth: boolean): void 
   const send = transport.send.bind(transport);
   transport.send = async (message, options) => {
     wire.push(JSON.stringify(message));
-    return send(message, auth ? { ...options, authInfo: { token: 'secret-token', clientId: 'svc-1', scopes: [] } } : options);
+    return send(message, auth ? { ...options, authInfo: { token: 'secret-token', clientId: 'svc-1', scopes: ['search:read'] } } : options);
   };
 }
 
@@ -185,7 +185,7 @@ describe('instrumentMcpTransport with the SDK', () => {
     expect(operation(await client.settle(), 'tools/call').finish).toMatchObject({ outcome: 'transport_error' });
   });
 
-  it('records the authenticated client from authInfo without sending the token or the raw client ID', async () => {
+  it('records the authenticated client, its client id and scopes from authInfo, never the token', async () => {
     const server = capture();
     const { client: mcp } = await connect({ serverRecorder: server.recorder, auth: true });
     await mcp.callTool({ name: 'search', arguments: { to: 'Faro' } });
@@ -193,8 +193,10 @@ describe('instrumentMcpTransport with the SDK', () => {
     expect(operation(events, 'tools/call').start.counterparty.authenticated).toEqual({
       issuer: 'https://idp.example',
       subject_hash: await subjectHash('https://idp.example', 'svc-1'),
+      client_id: 'svc-1',
+      scopes: ['search:read'],
     });
-    expect(JSON.stringify(server.batches)).not.toMatch(/svc-1|secret-token/);
+    expect(JSON.stringify(server.batches)).not.toMatch(/secret-token/);
   });
 
   it('keeps the session working when the onOperation hook throws', async () => {

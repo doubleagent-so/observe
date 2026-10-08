@@ -127,6 +127,26 @@ describe('withMcpTelemetry', () => {
     });
   });
 
+  it('records a 403 insufficient_scope challenge with the scopes the server asked for', async () => {
+    const c = capture();
+    const challenge =
+      'Bearer error="insufficient_scope", scope="files:read files:write", resource_metadata="https://hand.example/.well-known/oauth-protected-resource"';
+    const forbidden = withMcpTelemetry(async () => new Response('forbidden', { status: 403, headers: { 'www-authenticate': challenge } }), {
+      recorder: c.recorder,
+      waitUntil: c.schedule,
+    });
+    await forbidden(post(rpc(1, 'tools/call', { name: 'write_file' })));
+    const plain = withMcpTelemetry(async () => new Response('forbidden', { status: 403 }), { recorder: c.recorder, waitUntil: c.schedule });
+    await plain(post(rpc(2, 'tools/list')));
+    const events = await c.settle();
+    expect(operation(events, 'tools/call').finish).toMatchObject({
+      outcome: 'auth_rejected',
+      insufficient_scope: { required: ['files:read', 'files:write'] },
+    });
+    expect(operation(events, 'tools/list').finish).not.toHaveProperty('insufficient_scope');
+    expectValid(c.batches);
+  });
+
   it('records an oversized body as one unknown operation and still hands the handler the whole body', async () => {
     const c = capture();
     const { handler, received } = handMade();

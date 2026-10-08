@@ -27,6 +27,7 @@ import {
   type Log,
   type WaitUntil,
 } from '../http.ts';
+import { insufficientScope } from '../evidence.ts';
 import { isRecord } from '../patterns.ts';
 import { x402Charge } from '../payments.ts';
 import type { CounterpartyInput, FinishInput, Recorder } from '../recorder.ts';
@@ -77,9 +78,13 @@ function parse(read: LimitedRead): Parsed {
   return { kind: 'messages', body, hasInitialize: entries.some((entry) => isRecord(entry) && entry.method === 'initialize') };
 }
 
-/** How an HTTP status finishes the operations of its request when no JSON-RPC response says otherwise. */
-function outcomeFor(status: number): FinishInput {
-  if (status === 401 || status === 403) return { outcome: 'auth_rejected' };
+/**
+ * How an HTTP response finishes the operations of its request when no JSON-RPC response says otherwise. A 403 with an
+ * `insufficient_scope` challenge (MCP authorization) carries the scopes the server asked for.
+ */
+function outcomeFor(response: Response): FinishInput {
+  const { status } = response;
+  if (status === 401 || status === 403) return { outcome: 'auth_rejected', ...insufficientScope(response) };
   if (status >= 400) return { outcome: 'protocol_error', error: httpError(status) };
   return { outcome: 'ok' };
 }
@@ -157,7 +162,7 @@ class McpFetchTelemetry<Args extends unknown[]> {
     if (exchange.isDeferred) this.#safely(() => this.#engine.observe('peer', exchange.body, exchange.requestContext()));
     this.#safely(() => this.#attachHeaderCharge(request, response, exchange));
     if (response.status >= 400) {
-      this.#endExchange(exchange, outcomeFor(response.status), schedule);
+      this.#endExchange(exchange, outcomeFor(response), schedule);
       return response;
     }
     const firstByteMs = Math.max(0, Date.now() - exchange.startedAt);
@@ -224,7 +229,7 @@ class McpFetchTelemetry<Args extends unknown[]> {
       this.#flushLater(schedule);
       throw error;
     }
-    this.#safely(() => op.finish(outcomeFor(response.status)));
+    this.#safely(() => op.finish(outcomeFor(response)));
     this.#flushLater(schedule);
     return response;
   }
@@ -247,7 +252,7 @@ class McpFetchTelemetry<Args extends unknown[]> {
       this.#flushLater(schedule);
       throw error;
     }
-    this.#safely(() => op.finish(outcomeFor(response.status)));
+    this.#safely(() => op.finish(outcomeFor(response)));
     if (response.status < 400) {
       this.#safely(() => this.#engine.close(session));
       this.#sessions.forget(ref);

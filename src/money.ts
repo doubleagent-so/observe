@@ -4,6 +4,7 @@ import type {
   CostRecorded,
   CostUsage,
   Direction,
+  MandateRef,
   MoneyBasis,
   PaymentMethod,
   Protocol,
@@ -35,6 +36,8 @@ export interface TransactionFields {
   basis: MoneyBasis;
   status: TransactionStatus;
   externalRef?: string;
+  /** The AP2 or ACP mandate the payment was made under: a reference only, never the mandate. */
+  mandateRef?: MandateRef;
 }
 
 export interface CostInput {
@@ -62,6 +65,8 @@ export interface ChargeInput {
   processor?: string;
   network?: string;
   externalRef?: string;
+  /** The AP2 or ACP mandate the payment was made under: a reference only, never the mandate. */
+  mandateRef?: MandateRef;
   /** Pass your own to update the same transaction later (pending → settled); generated otherwise. */
   transactionId?: string;
   /** Defaults to the operation's task. */
@@ -123,6 +128,7 @@ export function transactionEvent(links: MoneyLinks, fields: TransactionFields, a
     basis: fields.basis,
     status: fields.status,
     ...(fields.externalRef ? { external_ref: fields.externalRef } : {}),
+    ...(fields.mandateRef ? { mandate_ref: { scheme: fields.mandateRef.scheme, ref: fields.mandateRef.ref } } : {}),
   };
 }
 
